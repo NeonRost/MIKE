@@ -1,0 +1,24 @@
+# Xcode
+xcuserdata/
+*.xcuserdatad/
+DerivedData/
+build/
+.build/
+.build-release/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+timeline.xctimeline
+playground.xcworkspace
+
+# Build artifacts
+MIKE.app/
+MIKE.zip
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+
+# Claude Code local settings (contain local paths)
+.claude/settings.local.json

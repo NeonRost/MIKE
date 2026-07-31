@@ -1,0 +1,53 @@
+name: MIKE
+options:
+  bundleIdPrefix: com.neonrost
+  # Base language of the project: if macOS finds no matching translation,
+  # it falls back to English.
+  developmentLanguage: en
+  # Translations live in MIKE/Localizable.xcstrings.
+  knownRegions: [en, de, es, Base]
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    SWIFT_EMIT_LOC_STRINGS: YES
+    COMBINE_HIDPI_IMAGES: YES
+    ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: NO
+targets:
+  MIKE:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: MIKE
+        excludes:
+          - "Info.plist"
+          - "Localizable.xcstrings"
+          - "Resources"
+      # The string catalog: English is the source, translations live alongside.
+      - path: MIKE/Localizable.xcstrings
+        buildPhase: resources
+      # The two .js files belong in Copy Bundle Resources, never in
+      # Compile Sources.
+      - path: MIKE/Resources
+        buildPhase: resources
+      # Shipped inside the bundle so "Show License" can display them offline.
+      - path: LICENSE
+        buildPhase: resources
+      # Apache 2.0, covering the bundled Readability.js.
+      - path: LICENSE-Readability
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.neonrost.MIKE
+        PRODUCT_NAME: MIKE
+        INFOPLIST_FILE: MIKE/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # No sandbox: MIKE launches yt-dlp/ffmpeg from outside the bundle
+        # and writes to folders the user picks.
+        ENABLE_HARDENED_RUNTIME: YES

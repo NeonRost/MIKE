@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Blaue Werkzeugkiste">
+  <!-- Source shape for the MIKE app icon. The PNGs in
+       MIKE/Assets.xcassets/AppIcon.appiconset are drawn from the same
+       geometry with Core Graphics, which additionally drops the latches and
+       the grip plate below 64 px so the silhouette stays readable. -->
+  <defs>
+    <clipPath id="bodyClip">
+      <rect x="92" y="286" width="840" height="590" rx="64" ry="64"/>
+    </clipPath>
+  </defs>
+
+  <!-- Handle: wide flat arch, drawn first so the body covers its feet -->
+  <path fill="#d4dee6" stroke="#7c8b98" stroke-width="14" stroke-linejoin="round" fill-rule="evenodd"
+        d="M424 148 h176 a52 52 0 0 1 52 52 v104 a52 52 0 0 1 -52 52 h-176 a52 52 0 0 1 -52 -52 v-104 a52 52 0 0 1 52 -52 z
+           M458 206 h108 a30 30 0 0 1 30 30 v100 a30 30 0 0 1 -30 30 h-108 a30 30 0 0 1 -30 -30 v-100 a30 30 0 0 1 30 -30 z"/>
+
+  <!-- Body -->
+  <rect x="92" y="286" width="840" height="590" rx="64" ry="64" fill="#559de0"/>
+
+  <g clip-path="url(#bodyClip)">
+    <!-- Shallow diagonal for depth -->
+    <polygon points="92,800 932,690 932,876 92,876" fill="#4a93d8"/>
+    <!-- Band across the full width: the lid seam -->
+    <rect x="92" y="452" width="840" height="118" fill="#3f88cf"/>
+    <line x1="92" y1="452" x2="932" y2="452" stroke="#7c8b98" stroke-width="12"/>
+    <line x1="92" y1="570" x2="932" y2="570" stroke="#7c8b98" stroke-width="12"/>
+    <!-- Plastic gloss -->
+    <polygon points="210,286 296,286 178,876 106,876" fill="#ffffff" opacity="0.14"/>
+  </g>
+
+  <!-- Body outline on top, so the edge stays clean over the fills -->
+  <rect x="92" y="286" width="840" height="590" rx="64" ry="64"
+        fill="none" stroke="#7c8b98" stroke-width="14"/>
+
+  <!-- Recessed grip plate -->
+  <rect x="444" y="344" width="136" height="62" rx="18" ry="18"
+        fill="#d4dee6" stroke="#7c8b98" stroke-width="14"/>
+
+  <!-- Two symmetrical latches straddling the band -->
+  <g stroke="#7c8b98" stroke-width="14">
+    <rect x="214" y="414" width="96" height="196" rx="24" ry="24" fill="#d4dee6"/>
+    <rect x="242" y="452" width="40" height="120" rx="14" ry="14" fill="#b9c7d3"/>
+    <rect x="714" y="414" width="96" height="196" rx="24" ry="24" fill="#d4dee6"/>
+    <rect x="742" y="452" width="40" height="120" rx="14" ry="14" fill="#b9c7d3"/>
+  </g>
+</svg>
