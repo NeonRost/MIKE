@@ -16,59 +16,25 @@
 
 import SwiftUI
 
-struct DirectLinkView: View {
-    @State private var urlText = ""
-    @State private var resultLink = ""
-    @State private var isRunning = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
+/// Survives navigating away from and back to Direct Link — see
+/// `ArticleExtractionSession` for why this is needed at all.
+@MainActor
+final class DirectLinkSession: ObservableObject {
+    @Published var urlText = ""
+    @Published var resultLink = ""
+    @Published var isRunning = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
 
-    var body: some View {
-        // The ScrollView matters beyond overflow: without it the detail column
-        // sizes itself to the content's ideal height and spills out of the
-        // window instead of being clamped to it.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Direct Link",
-                    subtitle: "Turns a TikTok page URL into a direct link to the video file. Needs no external tools."
-                )
-
-                TextField("https://www.tiktok.com/@…/video/…", text: $urlText)
-                    .textFieldStyle(.roundedBorder)
-                    .disableAutocorrection(true)
-                    .onSubmit { resolve() }
-
-                HStack(spacing: 12) {
-                    Button("Get Link") { resolve() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isRunning || urlText.trimmingCharacters(in: .whitespaces).isEmpty)
-                    StatusLine(text: status, kind: statusKind)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Direct link")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        TextField(text: .constant(resultLink)) { EmptyView() }
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.callout, design: .monospaced))
-                            .disabled(true)
-                            .textSelection(.enabled)
-                        Button("Copy") { WebURL.copyToClipboard(resultLink) }
-                            .disabled(resultLink.isEmpty)
-                    }
-                }
-                .padding(.top, 4)
-
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    func clear() {
+        guard !isRunning else { return }
+        urlText = ""
+        resultLink = ""
+        status = ""
+        statusKind = .idle
     }
 
-    private func resolve() {
+    func resolve() {
         guard !isRunning else { return }
         let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -100,6 +66,61 @@ struct DirectLinkView: View {
                 statusKind = .failure
             }
             isRunning = false
+        }
+    }
+}
+
+struct DirectLinkView: View {
+    @ObservedObject var session: DirectLinkSession
+
+    private var canClear: Bool {
+        !session.isRunning && !(session.urlText.isEmpty && session.resultLink.isEmpty)
+    }
+
+    var body: some View {
+        // The ScrollView matters beyond overflow: without it the detail column
+        // sizes itself to the content's ideal height and spills out of the
+        // window instead of being clamped to it.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Direct Link",
+                    subtitle: "Turns a TikTok page URL into a direct link to the video file. Needs no external tools."
+                )
+
+                TextField("https://www.tiktok.com/@…/video/…", text: $session.urlText)
+                    .textFieldStyle(.roundedBorder)
+                    .disableAutocorrection(true)
+                    .onSubmit { session.resolve() }
+
+                HStack(spacing: 12) {
+                    Button("Get Link") { session.resolve() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(session.isRunning || session.urlText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Clear") { session.clear() }
+                        .disabled(!canClear)
+                    StatusLine(text: session.status, kind: session.statusKind)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Direct link")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        TextField(text: .constant(session.resultLink)) { EmptyView() }
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.callout, design: .monospaced))
+                            .disabled(true)
+                            .textSelection(.enabled)
+                        Button("Copy") { WebURL.copyToClipboard(session.resultLink) }
+                            .disabled(session.resultLink.isEmpty)
+                    }
+                }
+                .padding(.top, 4)
+
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

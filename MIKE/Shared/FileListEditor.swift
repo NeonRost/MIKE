@@ -52,6 +52,11 @@ struct FileListEditor: View {
     /// `allowedExtensions` still describes what belongs in the list, but no
     /// longer gates what the panel shows or what a pick is allowed to be.
     var permitsAnyFile: Bool = false
+    /// When true, the picker also accepts folders — each chosen folder is
+    /// expanded into the files directly inside it (no subfolders) via
+    /// `expand(folder:allowedExtensions:permitsAnyFile:)`. Off by default so
+    /// every existing consumer keeps picking files only.
+    var permitsFolders: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -119,7 +124,7 @@ struct FileListEditor: View {
     private func add() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = permitsFolders
         panel.allowsMultipleSelection = true
         panel.prompt = String(localized: "Add", comment: "Confirm button in the file picker")
         if !permitsAnyFile {
@@ -131,10 +136,19 @@ struct FileListEditor: View {
 
         // Appending rather than replacing, so files can be collected from
         // several folders in a row.
-        for url in panel.urls
-        where (permitsAnyFile || allowedExtensions.contains(url.pathExtension.lowercased()))
-            && !files.contains(url) {
-            files.append(url)
+        for url in panel.urls {
+            var isDirectory: ObjCBool = false
+            if permitsFolders,
+               FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                for expanded in Self.expand(folder: url, allowedExtensions: allowedExtensions, permitsAnyFile: permitsAnyFile)
+                where !files.contains(expanded) {
+                    files.append(expanded)
+                }
+            } else if (permitsAnyFile || allowedExtensions.contains(url.pathExtension.lowercased()))
+                && !files.contains(url) {
+                files.append(url)
+            }
         }
     }
 
@@ -142,6 +156,20 @@ struct FileListEditor: View {
         files.sort {
             $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
                 == .orderedAscending
+        }
+    }
+
+    /// Non-recursive: a folder's own subfolders are skipped entirely rather
+    /// than descended into, matching the "no subfolders" rule callers rely on.
+    static func expand(folder: URL, allowedExtensions: Set<String>, permitsAnyFile: Bool) -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return contents.filter { url in
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return false }
+            return permitsAnyFile || allowedExtensions.contains(url.pathExtension.lowercased())
         }
     }
 }

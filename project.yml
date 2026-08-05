@@ -9,6 +9,29 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+packages:
+  # TAR/GZip read+write for the Compression tool's TAR.GZ side. ZIP write is
+  # still unimplemented upstream (read-only), which is why ZIPFoundation
+  # covers ZIP instead — see ZIPFoundation below.
+  # Pinned to 4.8.2, not the newer 4.9.0: that release raised SWCompression's
+  # own minimum macOS deployment target from 13.0 to 14.0, which would force
+  # MIKE's whole app target up with it. 4.8.2 is the last version still
+  # compatible with MIKE's macOS 13.0 floor.
+  SWCompression:
+    url: https://github.com/tsolomko/SWCompression.git
+    exactVersion: 4.8.2
+  # SWCompression's own transitive dependency. Pinned for the same reason:
+  # its newest version (2.1.0) also raised its minimum macOS target to 14.0,
+  # which SPM would otherwise happily resolve to since SWCompression 4.8.2's
+  # own dependency range allows it. 2.0.4 is the last version still at 10.13.
+  BitByteData:
+    url: https://github.com/tsolomko/BitByteData.git
+    exactVersion: 2.0.4
+  # ZIP read+write for the Compression tool's ZIP side, with built-in
+  # Progress/cancel support.
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.20
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -42,6 +65,9 @@ targets:
       # Apache 2.0, covering the bundled Readability.js.
       - path: LICENSE-Readability
         buildPhase: resources
+    dependencies:
+      - package: SWCompression
+      - package: ZIPFoundation
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.neonrost.MIKE

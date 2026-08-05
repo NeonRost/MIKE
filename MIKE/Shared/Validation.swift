@@ -60,3 +60,16 @@ enum WebURL {
         NSPasteboard.general.setString(text, forType: .string)
     }
 }
+
+/// Promoted out of `TextRecognizer` into `Shared` once Convert Format became a
+/// second real consumer of "read whatever image is on the clipboard right
+/// now" — the same move `FolderRow` went through earlier for the same reason.
+enum ClipboardImage {
+
+    /// The clipboard's image bytes, in whatever representation is present.
+    /// `ImageConverter.load(from:)` reads either through ImageIO.
+    static func data() -> Data? {
+        let pasteboard = NSPasteboard.general
+        return pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff)
+    }
+}

@@ -21,7 +21,7 @@ import UniformTypeIdentifiers
 /// Single File vs. Batch, shown as a segmented switch. Distinct from
 /// `CombineSource` (Folder/Files in Combine Images) — that switch picks where
 /// several files come from; this one picks whether there is one file at all.
-private enum ConvertMode: String, CaseIterable, Identifiable {
+enum ConvertMode: String, CaseIterable, Identifiable {
     case single = "Single File"
     case batch = "Batch"
 
@@ -35,127 +35,81 @@ private enum ConvertMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct ConvertFormatView: View {
-    let onOpenTools: () -> Void
+/// Survives navigating away from and back to Convert Format — see
+/// `ArticleExtractionSession` for why this is needed at all. The two
+/// `OutputDirectory` instances stay in the view: they are already
+/// `UserDefaults`-backed and persist on their own.
+@MainActor
+final class ConvertFormatSession: ObservableObject {
+    @Published var mode = ConvertMode.single
 
-    @EnvironmentObject private var tools: ToolRegistry
-    @StateObject private var directory = OutputDirectory(defaultsKey: "ImgConvertOutputDir")
-    @StateObject private var batchDirectory = OutputDirectory(defaultsKey: "ImgConvertBatchOutputDir")
+    // MARK: Single file
 
-    @State private var mode = ConvertMode.single
-
-    // MARK: Single file — unchanged from before batch mode existed.
-
-    @State private var sourceFile: URL?
-    @State private var urlText = ""
-    @State private var format = ImageFormat.jpeg
-    @State private var isRunning = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
+    @Published var sourceFile: URL?
+    @Published var urlText = ""
+    @Published var pastedImageData: Data?
+    @Published var pastedImageSize: CGSize?
+    @Published var format = ImageFormat.jpeg
+    @Published var isRunning = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
 
     // MARK: Batch
 
-    @State private var batchFolder: URL?
-    @State private var sourceFormat = ImageFormat.jpeg
-    @State private var batchTargetFormat = ImageFormat.jpeg
-    @State private var batchFiles: [URL] = []
-    @State private var jpegQuality: Double = 100
-    @State private var isBatchDropTargeted = false
-    @State private var isBatchRunning = false
-    @State private var batchCurrentIndex = 0
-    @State private var batchStatus = ""
-    @State private var batchStatusKind = StatusLine.Kind.idle
-    @State private var batchTask: Task<Void, Never>?
+    @Published var batchFolder: URL?
+    @Published var sourceFormat = ImageFormat.jpeg
+    @Published var batchTargetFormat = ImageFormat.jpeg
+    @Published var batchFiles: [URL] = []
+    @Published var jpegQuality: Double = 100
+    @Published var isBatchRunning = false
+    @Published var batchCurrentIndex = 0
+    @Published var batchStatus = ""
+    @Published var batchStatusKind = StatusLine.Kind.idle
+    private var batchTask: Task<Void, Never>?
 
-    private var webpEncoder: WebPEncoder? { tools.webpEncoder }
-    private var canEncodeWebP: Bool { webpEncoder != nil }
-
-    /// The URL field wins when both are filled in.
-    private var usesRemoteSource: Bool {
+    /// The URL field wins if it happens to be filled in alongside a chosen
+    /// file or a pasted image — in practice this never actually happens,
+    /// since choosing a file or pasting an image both clear it, and typing a
+    /// URL doesn't clear them back, only out-ranks them here.
+    var usesRemoteSource: Bool {
         !urlText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    private var canConvert: Bool {
+    func canConvert(canEncodeWebP: Bool) -> Bool {
         guard !isRunning else { return false }
-        guard usesRemoteSource || sourceFile != nil else { return false }
+        guard usesRemoteSource || sourceFile != nil || pastedImageData != nil else { return false }
         return !(format.requiresExternalEncoder && !canEncodeWebP)
     }
 
-    private var canConvertBatch: Bool {
+    func canConvertBatch(canEncodeWebP: Bool) -> Bool {
         guard !isBatchRunning, !batchFiles.isEmpty else { return false }
         return !(batchTargetFormat.requiresExternalEncoder && !canEncodeWebP)
     }
 
-    var body: some View {
-        // The ScrollView matters beyond overflow: without it the detail column
-        // sizes itself to the content's ideal height and spills out of the
-        // window instead of being clamped to it.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Convert Format",
-                    subtitle: "Converts images to another format, as losslessly as each format allows."
-                )
+    /// Resets both modes at once rather than just the active one — a single,
+    /// predictable "start over" regardless of which segment is selected.
+    func clear() {
+        guard !isRunning, !isBatchRunning else { return }
+        sourceFile = nil
+        urlText = ""
+        pastedImageData = nil
+        pastedImageSize = nil
+        format = .jpeg
+        status = ""
+        statusKind = .idle
 
-                Picker("Mode", selection: $mode) {
-                    ForEach(ConvertMode.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .disabled(isRunning || isBatchRunning)
-
-                switch mode {
-                case .single: singleFileContent
-                case .batch: batchContent
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        batchFolder = nil
+        sourceFormat = .jpeg
+        batchTargetFormat = .jpeg
+        batchFiles = []
+        jpegQuality = 100
+        batchStatus = ""
+        batchStatusKind = .idle
     }
 
-    // MARK: - Single file (unchanged behaviour)
+    // MARK: - Single file actions
 
-    @ViewBuilder
-    private var singleFileContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            FileRow(
-                label: "Image file",
-                file: sourceFile,
-                isEnabled: !isRunning,
-                onChoose: chooseFile,
-                onClear: { sourceFile = nil }
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("…or a direct link to the image")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("https://…/image.webp", text: $urlText)
-                    .textFieldStyle(.roundedBorder)
-                    .disableAutocorrection(true)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Text("Target format")
-                    targetFormatMenu(selection: $format, isEnabled: !isRunning)
-                }
-                webpHint
-            }
-
-            OutputDirectoryRow(directory: directory, isEnabled: !isRunning)
-
-            HStack(spacing: 12) {
-                Button("Convert") { convert() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canConvert)
-                StatusLine(text: status, kind: statusKind)
-            }
-        }
-    }
-
-    private func chooseFile() {
+    func chooseFile(directory: OutputDirectory) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -164,21 +118,45 @@ struct ConvertFormatView: View {
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
 
         sourceFile = chosen
-        // Picking a file clears the URL, so the active source is never
-        // ambiguous.
+        // Picking a file makes it the active source, so the other two are
+        // cleared — the same rule pasting and typing a URL follow.
+        urlText = ""
+        clearPastedImage()
+        status = ""
+        statusKind = .idle
+    }
+
+    func pasteImageFromClipboard() {
+        guard !isRunning else { return }
+        guard let data = ClipboardImage.data(), let image = try? ImageConverter.load(from: data) else {
+            status = String(localized: "No image in the clipboard.")
+            statusKind = .idle
+            return
+        }
+
+        pastedImageData = data
+        pastedImageSize = CGSize(width: image.width, height: image.height)
+        // Pasting makes it the active source, so the other two are cleared —
+        // the same rule chooseFile() already follows for the URL.
+        sourceFile = nil
         urlText = ""
         status = ""
         statusKind = .idle
     }
 
-    private func convert() {
-        guard canConvert else { return }
+    func clearPastedImage() {
+        pastedImageData = nil
+        pastedImageSize = nil
+    }
+
+    func convert(webpEncoder: WebPEncoder?, canEncodeWebP: Bool, directory: OutputDirectory) {
+        guard canConvert(canEncodeWebP: canEncodeWebP) else { return }
 
         let chosenFormat = format
         let target = directory.url
-        let encoder = webpEncoder
         let remote = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         let localFile = sourceFile
+        let pastedData = pastedImageData
 
         if usesRemoteSource, !WebURL.isValid(remote) {
             status = String(localized: "That is not a valid URL.")
@@ -202,6 +180,9 @@ struct ConvertFormatView: View {
                 } else if let localFile {
                     image = try ImageConverter.load(from: localFile)
                     stem = localFile.deletingPathExtension().lastPathComponent
+                } else if let pastedData {
+                    image = try ImageConverter.load(from: pastedData)
+                    stem = "pasted-image"
                 } else {
                     throw ImageConversionError.cannotRead
                 }
@@ -214,7 +195,7 @@ struct ConvertFormatView: View {
                                 stem: stem,
                                 to: chosenFormat,
                                 in: target,
-                                webpEncoder: encoder
+                                webpEncoder: webpEncoder
                             )
                             continuation.resume(returning: result)
                         } catch {
@@ -233,92 +214,9 @@ struct ConvertFormatView: View {
         }
     }
 
-    // MARK: - Batch
+    // MARK: - Batch actions
 
-    @ViewBuilder
-    private var batchContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            FolderRow(
-                folder: batchFolder,
-                detail: batchFolder == nil ? nil : batchCountText,
-                isEnabled: !isBatchRunning,
-                onChoose: chooseBatchFolder
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isBatchDropTargeted ? Color.accentColor : .clear, lineWidth: 2)
-            )
-            .onDrop(of: [.fileURL], isTargeted: $isBatchDropTargeted) { providers in
-                handleFolderDrop(providers)
-            }
-
-            if batchFolder != nil {
-                HStack(alignment: .top, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Source format")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker(selection: $sourceFormat) {
-                            ForEach(ImageFormat.allCases) { candidate in
-                                Text(candidate.rawValue).tag(candidate)
-                            }
-                        } label: { EmptyView() }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
-                        .disabled(isBatchRunning)
-                        .onChange(of: sourceFormat) { _ in rescanBatchFolder() }
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Target format")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        targetFormatMenu(selection: $batchTargetFormat, isEnabled: !isBatchRunning)
-                    }
-                }
-
-                webpHint
-
-                if batchTargetFormat == .jpeg {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Quality")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(verbatim: "\(Int(jpegQuality))%")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: $jpegQuality, in: 1...100, step: 1)
-                    }
-                    .frame(maxWidth: 280)
-                    .disabled(isBatchRunning)
-                }
-
-                OutputDirectoryRow(directory: batchDirectory, isEnabled: !isBatchRunning)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 12) {
-                        Button("Convert") { convertBatch() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!canConvertBatch)
-                        if isBatchRunning {
-                            Button("Cancel") { cancelBatch() }
-                        }
-                        StatusLine(text: batchStatus, kind: batchStatusKind)
-                    }
-                    if isBatchRunning {
-                        ProgressView(value: Double(batchCurrentIndex), total: Double(max(batchFiles.count, 1)))
-                            .frame(maxWidth: 260)
-                    }
-                }
-            }
-        }
-    }
-
-    private var batchCountText: String {
+    var batchCountText: String {
         String(
             localized: "\(batchFiles.count) \(batchFormatLabel) files found",
             comment: "Placeholder 2 is an untranslated format name such as HEIC"
@@ -327,24 +225,24 @@ struct ConvertFormatView: View {
 
     /// `sourceFormat.rawValue` arrives through a variable, not a string
     /// literal, so SwiftUI never treats it as a catalog key — the same reason
-    /// the target-format menu below can pass format names straight through.
-    private var batchFormatLabel: String { sourceFormat.rawValue }
+    /// the target-format menu can pass format names straight through.
+    var batchFormatLabel: String { sourceFormat.rawValue }
 
-    private func chooseBatchFolder() {
+    func chooseBatchFolder(directory: OutputDirectory) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the folder picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        loadBatchFolder(chosen)
+        loadBatchFolder(chosen, directory: directory)
     }
 
-    private func loadBatchFolder(_ folder: URL) {
+    func loadBatchFolder(_ folder: URL, directory: OutputDirectory) {
         batchFolder = folder
         // Defaults to writing back into the source folder, as specified —
         // still freely redirectable via the row's own Choose… button.
-        batchDirectory.set(folder)
+        directory.set(folder)
         batchStatus = ""
         batchStatusKind = .idle
         rescanBatchFolder()
@@ -353,38 +251,18 @@ struct ConvertFormatView: View {
     /// Re-filters the already-chosen folder for the current source format.
     /// Runs on every source-format change so the count updates live without
     /// requiring the folder to be re-picked.
-    private func rescanBatchFolder() {
+    func rescanBatchFolder() {
         guard let batchFolder else { batchFiles = []; return }
         batchFiles = ImageConverter.candidates(in: batchFolder, format: sourceFormat)
     }
 
-    private func handleFolderDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !isBatchRunning, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else { return }
-            DispatchQueue.main.async { loadBatchFolder(url) }
-        }
-        return true
-    }
-
-    private func convertBatch() {
-        guard canConvertBatch else { return }
+    func convertBatch(webpEncoder: WebPEncoder?, canEncodeWebP: Bool, directory: OutputDirectory) {
+        guard canConvertBatch(canEncodeWebP: canEncodeWebP) else { return }
 
         let files = batchFiles
         let targetFormatSnapshot = batchTargetFormat
-        let encoder = webpEncoder
         let quality = jpegQuality / 100
-        let target = batchDirectory.url
+        let target = directory.url
 
         isBatchRunning = true
         batchCurrentIndex = 0
@@ -415,7 +293,7 @@ struct ConvertFormatView: View {
                                 stem: stem,
                                 to: targetFormatSnapshot,
                                 in: target,
-                                webpEncoder: encoder,
+                                webpEncoder: webpEncoder,
                                 quality: quality
                             )
                             continuation.resume(returning: .success(output))
@@ -437,7 +315,7 @@ struct ConvertFormatView: View {
         }
     }
 
-    private func cancelBatch() {
+    func cancelBatch() {
         batchTask?.cancel()
     }
 
@@ -464,6 +342,226 @@ struct ConvertFormatView: View {
         }
         batchStatus = message
         batchStatusKind = converted > 0 ? .success : .failure
+    }
+}
+
+struct ConvertFormatView: View {
+    let onOpenTools: () -> Void
+
+    @EnvironmentObject private var tools: ToolRegistry
+    @ObservedObject var session: ConvertFormatSession
+    @StateObject private var directory = OutputDirectory(defaultsKey: "ImgConvertOutputDir")
+    @StateObject private var batchDirectory = OutputDirectory(defaultsKey: "ImgConvertBatchOutputDir")
+
+    @State private var isBatchDropTargeted = false
+
+    private var webpEncoder: WebPEncoder? { tools.webpEncoder }
+    private var canEncodeWebP: Bool { webpEncoder != nil }
+
+    private var canClear: Bool {
+        !session.isRunning && !session.isBatchRunning
+            && !(session.sourceFile == nil && session.urlText.isEmpty && session.pastedImageData == nil && session.batchFolder == nil)
+    }
+
+    var body: some View {
+        // The ScrollView matters beyond overflow: without it the detail column
+        // sizes itself to the content's ideal height and spills out of the
+        // window instead of being clamped to it.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Convert Format",
+                    subtitle: "Converts images to another format, as losslessly as each format allows."
+                )
+
+                Picker("Mode", selection: $session.mode) {
+                    ForEach(ConvertMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .disabled(session.isRunning || session.isBatchRunning)
+
+                switch session.mode {
+                case .single: singleFileContent
+                case .batch: batchContent
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: - Single file (unchanged behaviour)
+
+    @ViewBuilder
+    private var singleFileContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            FileRow(
+                label: "Image file",
+                file: session.sourceFile,
+                isEnabled: !session.isRunning,
+                onChoose: { session.chooseFile(directory: directory) },
+                onClear: { session.sourceFile = nil }
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("…or a direct link to the image")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("https://…/image.webp", text: $session.urlText)
+                    .textFieldStyle(.roundedBorder)
+                    .disableAutocorrection(true)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("…or an image from the clipboard")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    if let pastedImageSize = session.pastedImageSize {
+                        Text(
+                            "Image from clipboard (\(Int(pastedImageSize.width))×\(Int(pastedImageSize.height)))",
+                            comment: "Placeholders are pixel width and height"
+                        )
+                    } else {
+                        Text("No image pasted")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    if session.pastedImageData != nil {
+                        Button("Clear") { session.clearPastedImage() }
+                            .disabled(session.isRunning)
+                    }
+                    Button("Paste") { session.pasteImageFromClipboard() }
+                        .disabled(session.isRunning)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    Text("Target format")
+                    targetFormatMenu(selection: $session.format, isEnabled: !session.isRunning)
+                }
+                webpHint
+            }
+
+            OutputDirectoryRow(directory: directory, isEnabled: !session.isRunning)
+
+            HStack(spacing: 12) {
+                Button("Convert") { session.convert(webpEncoder: webpEncoder, canEncodeWebP: canEncodeWebP, directory: directory) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!session.canConvert(canEncodeWebP: canEncodeWebP))
+                Button("Clear") { session.clear() }
+                    .disabled(!canClear)
+                StatusLine(text: session.status, kind: session.statusKind)
+            }
+        }
+    }
+
+    // MARK: - Batch
+
+    @ViewBuilder
+    private var batchContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            FolderRow(
+                folder: session.batchFolder,
+                detail: session.batchFolder == nil ? nil : session.batchCountText,
+                isEnabled: !session.isBatchRunning,
+                onChoose: { session.chooseBatchFolder(directory: batchDirectory) }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isBatchDropTargeted ? Color.accentColor : .clear, lineWidth: 2)
+            )
+            .onDrop(of: [.fileURL], isTargeted: $isBatchDropTargeted) { providers in
+                handleFolderDrop(providers)
+            }
+
+            if session.batchFolder != nil {
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Source format")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker(selection: $session.sourceFormat) {
+                            ForEach(ImageFormat.allCases) { candidate in
+                                Text(candidate.rawValue).tag(candidate)
+                            }
+                        } label: { EmptyView() }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                        .disabled(session.isBatchRunning)
+                        .onChange(of: session.sourceFormat) { _ in session.rescanBatchFolder() }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Target format")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        targetFormatMenu(selection: $session.batchTargetFormat, isEnabled: !session.isBatchRunning)
+                    }
+                }
+
+                webpHint
+
+                if session.batchTargetFormat == .jpeg {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Quality")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(verbatim: "\(Int(session.jpegQuality))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $session.jpegQuality, in: 1...100, step: 1)
+                    }
+                    .frame(maxWidth: 280)
+                    .disabled(session.isBatchRunning)
+                }
+
+                OutputDirectoryRow(directory: batchDirectory, isEnabled: !session.isBatchRunning)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        Button("Convert") { session.convertBatch(webpEncoder: webpEncoder, canEncodeWebP: canEncodeWebP, directory: batchDirectory) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!session.canConvertBatch(canEncodeWebP: canEncodeWebP))
+                        if session.isBatchRunning {
+                            Button("Cancel") { session.cancelBatch() }
+                        }
+                        Button("Clear") { session.clear() }
+                            .disabled(!canClear)
+                        StatusLine(text: session.batchStatus, kind: session.batchStatusKind)
+                    }
+                    if session.isBatchRunning {
+                        ProgressView(value: Double(session.batchCurrentIndex), total: Double(max(session.batchFiles.count, 1)))
+                            .frame(maxWidth: 260)
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleFolderDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !session.isBatchRunning, let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            let url: URL?
+            if let data = item as? Data {
+                url = URL(dataRepresentation: data, relativeTo: nil)
+            } else {
+                url = item as? URL
+            }
+            guard let url else { return }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { return }
+            DispatchQueue.main.async { session.loadBatchFolder(url, directory: batchDirectory) }
+        }
+        return true
     }
 
     // MARK: - Shared target-format picker

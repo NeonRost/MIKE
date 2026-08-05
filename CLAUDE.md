@@ -180,6 +180,50 @@ alongside the frozen `format` string, one per profile shape (`recode`,
 no height. `DownloadMode.video`'s `maxHeight` is `nil` on the default path,
 so `profile.format` itself is never touched or replaced.
 
+### Trim Video: duration from ffmpeg, playability from AVFoundation — never mixed up
+
+The two questions "how long is this file" and "can this app preview it" are
+answered by two completely different systems, verified directly rather than
+assumed to agree:
+
+- **Duration always comes from `ffmpeg -i`'s own `Duration:` line**
+  (`VideoTrimmer.duration`, the same probe-banner technique
+  `VideoConcatenator.layout` already uses for codec info), never from
+  `AVAsset`/`AVURLAsset`. Proven necessary, not just simpler: for a real AVI
+  file, `AVURLAsset(url:).load(.duration)` throws `AVFoundationErrorDomain
+  Code=-11829 "Cannot Open"` — AVFoundation cannot read a duration out of a
+  container it cannot open at all, which has nothing to do with ffmpeg's own,
+  entirely separate AVI demuxer being able to read the exact same file fine.
+  Sourcing duration from ffmpeg means it works identically for every accepted
+  format, including the ones the preview can't show.
+- **Preview availability is checked at runtime, not guessed from the file
+  extension.** `TrimVideoView.load(_:)` calls `AVURLAsset(url:).load(
+  .isPlayable)` and shows the "no preview" hint only if that call throws or
+  returns `false` — verified directly that it does throw for AVI on this
+  system rather than returning `false` cleanly, which is why the call is
+  wrapped in `try?` rather than a plain `try`. A hardcoded "these extensions
+  never preview" list would have been both less accurate (some `.mkv`/`.wmv`
+  files genuinely are playable, depending on the codec inside) and unverified.
+
+The trim itself (`-ss <start> -to <end> -i <input> -c copy <output>`, `-ss`
+before `-i` for speed) runs identically regardless of whether the preview
+loaded — the "no preview" hint leaves the Start/End fields and the Trim
+button fully usable, only the `AVPlayerView` is swapped for a text hint.
+Verified end-to-end with a real AVI: ffmpeg trims it correctly even though
+`AVPlayer` never displays a frame of it.
+
+The timeline's two markers read drag position from a *named* SwiftUI
+coordinate space (`.coordinateSpace(name: "timeline")` on the containing
+`GeometryReader`, `DragGesture(coordinateSpace: .named("timeline"))` on each
+marker) rather than each marker's own local frame or a translation-from-
+drag-start delta. A marker is a 14pt circle; its own local coordinate space
+only ever spans those 14 points, useless for computing where across the
+*whole* track a drag landed. Reading `value.location` against the shared
+named space gives an absolute position on the full timeline regardless of
+which marker the gesture happens to be attached to — simpler here than Quick
+Edit's anchor-preserving delta math, because a single point marker has no
+opposite edge that could drift.
+
 ### Deliberate departures from the original Python app
 
 These were decided on purpose and are not parity bugs to be "fixed":

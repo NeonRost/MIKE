@@ -2,7 +2,7 @@
 
 <img src="images/MIKE_Icon.png" width="200" alt="MIKE Icon">
 
-A small macOS toolbox for everyday media chores. Fifteen independent sections, picked from the sidebar:
+A small macOS toolbox for everyday media chores. Sixteen independent sections, picked from the sidebar:
 
 - **Download** – fetches a video with `yt-dlp` and picks the right settings by site: YouTube and unknown hosts are re-encoded to H.264/AAC so they play in QuickTime and iMessage, TikTok and Instagram are only rewrapped and keep their original quality. Live progress, and the download folder is remembered. An "Audio only" switch extracts just the audio track (MP3, M4A, AAC, OPUS, FLAC, WAV or OGG). By default both video and audio downloads take whatever quality yt-dlp considers best; unchecking "Best available quality" asks the source what it actually offers for that specific URL and lets you pick a genuine resolution or bitrate from the real list — MIKE never invents a number the source can't back up.
 - **Direct Link** – turns a TikTok page URL into a direct link to the video file, copied to the clipboard straight away. Needs no external tools.
@@ -16,6 +16,7 @@ A small macOS toolbox for everyday media chores. Fifteen independent sections, p
 - **Metadata** – lists the EXIF, GPS, TIFF and IPTC metadata in an image, with GPS shown as readable coordinates rather than raw values. Reading works on its own; with `exiftool` installed it can also set common fields (copyright, artist, description, capture date, GPS) and remove metadata — everything, or GPS alone. The unedited original is always kept alongside as a `_original` file.
 - **Embedded** – complements Metadata by showing the embedded text blocks it does not: PNG text chunks (`tEXt`, `zTXt`, `iTXt`), XMP packets in WebP/TIFF/JPEG, and other blocks outside the EXIF group. Recognised AI-generation fields (AUTOMATIC1111 `parameters`, ComfyUI `prompt`/`workflow`) are grouped and highlighted, JSON values are shown indented with a character and token count, and XMP appears as a structured tree. PNG chunks are read directly from the binary, so viewing works without any tool; editing, adding and removing entries needs `exiftool`. The same `_original` protection applies.
 - **Combine Videos** – joins MP4s without re-encoding. Mismatched files are detected up front and named, because ffmpeg would otherwise report success and hand back a file with broken timing or audio.
+- **Trim Video** – cuts a clip out of MP4, MOV, MKV, M4V, AVI, WMV or FLV without re-encoding. A preview with a draggable green start marker and red end marker sits above editable `HH:MM:SS.s` fields — drag or type, both stay in sync. Formats AVFoundation cannot preview (AVI, for instance) show a note instead of a blank player; trimming itself still works since it goes through ffmpeg, not the preview.
 - **Tag Editor** – reads and writes title, artist, album, year, track number, genre, comment and cover art, losslessly (`ffmpeg -c copy`). Empty fields are left alone, so only what you actually fill in gets written. The file is overwritten directly — safely: ffmpeg refuses to edit a file in place, so MIKE writes to a temporary file next to it and only swaps it in once ffmpeg has actually succeeded, leaving the original exactly as it was on any failure. Cover art is fully supported for MP3, FLAC and M4A; OGG, Opus, WAV and raw AAC have real gaps in what ffmpeg can do with them — see Known limitations.
 - **Track Splitter** – splits one long recording into several tracks at the silences between them, without re-encoding. Analyze first (threshold and minimum duration are both adjustable, and can be re-run as often as needed before splitting), name the tracks — typing a pattern like `Albumname_%n` fills in the whole list at once, and any name can still be overridden by hand — then split. Cancelling keeps whatever tracks already finished.
 - **Setup** – shows where the external tools were found, with version and path, and helps install what is missing. Not one of Mike's tools itself, which is why it sits apart at the bottom of the sidebar.
@@ -28,7 +29,7 @@ Output files are never overwritten: a second run writes `combined (2).jpg` rathe
 
 - macOS 13 (Ventura) or newer
 - Apple Silicon
-- `yt-dlp` and `ffmpeg` for the Download and Combine Videos sections, `cwebp` for WebP export, `exiftool` for editing and removing metadata — see below
+- `yt-dlp` and `ffmpeg` for the Download, Combine Videos and Trim Video sections, `cwebp` for WebP export, `exiftool` for editing and removing metadata — see below
 
 ## External tools
 

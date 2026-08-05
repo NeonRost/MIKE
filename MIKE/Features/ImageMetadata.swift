@@ -95,6 +95,27 @@ enum ImageMetadata {
         return groups
     }
 
+    /// EXIF's own `DateTimeOriginal`, parsed into a `Date`. `nil` for anything
+    /// ImageIO cannot open, or that carries no capture date at all — both are
+    /// the ordinary case for non-image files and images without EXIF, not
+    /// errors.
+    static func captureDate(from url: URL) -> Date? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+              let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String
+        else { return nil }
+        return exifDateFormatter.date(from: raw)
+    }
+
+    /// EXIF's own format: `yyyy:MM:dd HH:mm:ss`, local time, no time zone.
+    private static let exifDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return formatter
+    }()
+
     // MARK: - Group building
 
     private static func makeGroup(title: String, from dictionary: [CFString: Any]) -> MetadataGroup? {

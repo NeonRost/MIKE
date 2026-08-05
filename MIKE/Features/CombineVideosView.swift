@@ -17,147 +17,49 @@
 import AppKit
 import SwiftUI
 
-struct CombineVideosView: View {
-    let onOpenTools: () -> Void
-
-    @EnvironmentObject private var tools: ToolRegistry
-    @StateObject private var directory = OutputDirectory(defaultsKey: "CombineVideosOutputDir")
-
-    @State private var source = CombineSource.folder
-    @State private var folder: URL?
-    @State private var fileCount = 0
-    @State private var pickedFiles: [URL] = []
-    @State private var isRunning = false
-    @State private var isInspecting = false
-    @State private var problems: [(file: String, reasons: [String])] = []
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
+/// Survives navigating away from and back to Combine Videos — see
+/// `ArticleExtractionSession` for why this is needed at all.
+@MainActor
+final class CombineVideosSession: ObservableObject {
+    @Published var source = CombineSource.folder
+    @Published var folder: URL?
+    @Published var fileCount = 0
+    @Published var pickedFiles: [URL] = []
+    @Published var isRunning = false
+    @Published var isInspecting = false
+    @Published var problems: [(file: String, reasons: [String])] = []
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
     /// Held so Cancel can stop the running ffmpeg.
-    @State private var runningProcess: Process?
+    private var runningProcess: Process?
 
-    private var missingTools: [Tool] {
-        tools.missing(from: AppSection.combineVideos.requiredTools)
-    }
-
-    private var isReady: Bool { missingTools.isEmpty }
-
-    private var hasInput: Bool {
+    var hasInput: Bool {
         source == .folder ? folder != nil : !pickedFiles.isEmpty
     }
 
-    private var canCombine: Bool {
+    var canCombine: Bool {
         !isRunning && !isInspecting && hasInput && problems.isEmpty
     }
 
-    var body: some View {
-        // The ScrollView matters beyond overflow: without it the detail column
-        // sizes itself to the content's ideal height and spills out of the
-        // window instead of being clamped to it.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Combine Videos",
-                    subtitle: "Joins MP4s without re-encoding, saved as \(VideoConcatenator.outputName). All inputs need the same codec and format."
-                )
-
-                if !isReady {
-                    RequirementBanner(missing: missingTools, onOpenTools: onOpenTools)
-                }
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Picker("Source", selection: $source) {
-                        ForEach(CombineSource.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .disabled(isRunning)
-                    .onChange(of: source) { _ in refreshInspection() }
-
-                    if source == .folder {
-                        FolderRow(
-                            folder: folder,
-                            detail: folderDetail,
-                            isEnabled: !isRunning && !isInspecting,
-                            onChoose: chooseFolder
-                        )
-                    } else {
-                        FileListEditor(
-                            files: $pickedFiles,
-                            allowedExtensions: VideoConcatenator.acceptedExtensions,
-                            emptyMessage: "No videos selected. Add some — the order you put them in is the order they are combined.",
-                            addTitle: "Add Videos…",
-                            isEnabled: !isRunning && !isInspecting
-                        )
-                        .onChange(of: pickedFiles) { _ in refreshInspection() }
-                    }
-
-                    if !problems.isEmpty {
-                        mismatchNotice
-                    }
-
-                    OutputDirectoryRow(directory: directory, isEnabled: !isRunning)
-
-                    HStack(spacing: 12) {
-                        Button("Combine") { combine() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!canCombine)
-                        if isRunning {
-                            Button("Cancel") { cancel() }
-                        }
-                        StatusLine(text: status, kind: statusKind)
-                    }
-                }
-                .disabled(!isReady)
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+    func clear() {
+        guard !isRunning else { return }
+        source = .folder
+        folder = nil
+        fileCount = 0
+        pickedFiles = []
+        isInspecting = false
+        problems = []
+        status = ""
+        statusKind = .idle
     }
 
-    private var folderDetail: String? {
-        guard folder != nil else { return nil }
-        if isInspecting { return String(localized: "Checking files…") }
-        return String(
-            localized: "\(fileCount) videos found, in name order",
-            comment: "Count of videos in the chosen folder"
-        )
-    }
-
-    /// Joining without re-encoding needs identical streams. ffmpeg would
-    /// happily produce a broken file instead of failing, so the mismatch is
-    /// spelled out here and the button stays off.
-    private var mismatchNotice: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("These videos do not match and cannot be joined without re-encoding.")
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                ForEach(problems, id: \.file) { problem in
-                    Text(verbatim: "\(problem.file): \(ListFormatter.localizedString(byJoining: problem.reasons))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text("Joining them anyway would give you a file with broken timing or audio, so MIKE does not.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func cancel() {
+    func cancel() {
         guard let process = runningProcess, process.isRunning else { return }
         status = String(localized: "Cancelling…")
         process.terminate()
     }
 
-    private func chooseFolder() {
+    func chooseFolder(directory: OutputDirectory, ffmpeg: URL?) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -172,14 +74,14 @@ struct CombineVideosView: View {
         directory.set(chosen)
         status = ""
         statusKind = .idle
-        refreshInspection()
+        refreshInspection(ffmpeg: ffmpeg)
     }
 
     /// Runs whenever the input changes, so a mismatch is visible before the
     /// user commits to anything.
-    private func refreshInspection() {
+    func refreshInspection(ffmpeg: URL?) {
         problems = []
-        guard let ffmpeg = tools.status(for: .ffmpeg).url else { return }
+        guard let ffmpeg else { return }
 
         let files = source == .folder
             ? (folder.map { VideoConcatenator.candidates(in: $0) } ?? [])
@@ -199,8 +101,8 @@ struct CombineVideosView: View {
         }
     }
 
-    private func combine() {
-        guard canCombine, let ffmpeg = tools.status(for: .ffmpeg).url else { return }
+    func combine(ffmpeg: URL?, directory: OutputDirectory) {
+        guard canCombine, let ffmpeg else { return }
 
         let target = directory.url
         let files = source == .folder
@@ -220,7 +122,7 @@ struct CombineVideosView: View {
                             into: target,
                             ffmpeg: ffmpeg,
                             onStart: { process in
-                                DispatchQueue.main.async { runningProcess = process }
+                                DispatchQueue.main.async { [weak self] in self?.runningProcess = process }
                             }
                         )
                         continuation.resume(returning: Result<URL, Error>.success(output))
@@ -246,5 +148,129 @@ struct CombineVideosView: View {
                 statusKind = cancelled ? .idle : .failure
             }
         }
+    }
+}
+
+struct CombineVideosView: View {
+    let onOpenTools: () -> Void
+
+    @EnvironmentObject private var tools: ToolRegistry
+    @ObservedObject var session: CombineVideosSession
+    @StateObject private var directory = OutputDirectory(defaultsKey: "CombineVideosOutputDir")
+
+    private var missingTools: [Tool] {
+        tools.missing(from: AppSection.combineVideos.requiredTools)
+    }
+
+    private var isReady: Bool { missingTools.isEmpty }
+
+    private var ffmpeg: URL? { tools.status(for: .ffmpeg).url }
+
+    private var canClear: Bool {
+        !session.isRunning && !(session.folder == nil && session.pickedFiles.isEmpty)
+    }
+
+    var body: some View {
+        // The ScrollView matters beyond overflow: without it the detail column
+        // sizes itself to the content's ideal height and spills out of the
+        // window instead of being clamped to it.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Combine Videos",
+                    subtitle: "Joins MP4s without re-encoding, saved as \(VideoConcatenator.outputName). All inputs need the same codec and format."
+                )
+
+                if !isReady {
+                    RequirementBanner(missing: missingTools, onOpenTools: onOpenTools)
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    Picker("Source", selection: $session.source) {
+                        ForEach(CombineSource.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .disabled(session.isRunning)
+                    .onChange(of: session.source) { _ in session.refreshInspection(ffmpeg: ffmpeg) }
+
+                    if session.source == .folder {
+                        FolderRow(
+                            folder: session.folder,
+                            detail: folderDetail,
+                            isEnabled: !session.isRunning && !session.isInspecting,
+                            onChoose: { session.chooseFolder(directory: directory, ffmpeg: ffmpeg) }
+                        )
+                    } else {
+                        FileListEditor(
+                            files: $session.pickedFiles,
+                            allowedExtensions: VideoConcatenator.acceptedExtensions,
+                            emptyMessage: "No videos selected. Add some — the order you put them in is the order they are combined.",
+                            addTitle: "Add Videos…",
+                            isEnabled: !session.isRunning && !session.isInspecting
+                        )
+                        .onChange(of: session.pickedFiles) { _ in session.refreshInspection(ffmpeg: ffmpeg) }
+                    }
+
+                    if !session.problems.isEmpty {
+                        mismatchNotice
+                    }
+
+                    OutputDirectoryRow(directory: directory, isEnabled: !session.isRunning)
+
+                    HStack(spacing: 12) {
+                        Button("Combine") { session.combine(ffmpeg: ffmpeg, directory: directory) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!session.canCombine)
+                        if session.isRunning {
+                            Button("Cancel") { session.cancel() }
+                        }
+                        Button("Clear") { session.clear() }
+                            .disabled(!canClear)
+                        StatusLine(text: session.status, kind: session.statusKind)
+                    }
+                }
+                .disabled(!isReady)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var folderDetail: String? {
+        guard session.folder != nil else { return nil }
+        if session.isInspecting { return String(localized: "Checking files…") }
+        return String(
+            localized: "\(session.fileCount) videos found, in name order",
+            comment: "Count of videos in the chosen folder"
+        )
+    }
+
+    /// Joining without re-encoding needs identical streams. ffmpeg would
+    /// happily produce a broken file instead of failing, so the mismatch is
+    /// spelled out here and the button stays off.
+    private var mismatchNotice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("These videos do not match and cannot be joined without re-encoding.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(session.problems, id: \.file) { problem in
+                    Text(verbatim: "\(problem.file): \(ListFormatter.localizedString(byJoining: problem.reasons))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Joining them anyway would give you a file with broken timing or audio, so MIKE does not.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 }

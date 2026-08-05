@@ -17,20 +17,102 @@
 import AppKit
 import SwiftUI
 
+/// Survives navigating away from and back to Combine Images — see
+/// `ArticleExtractionSession` for why this is needed at all. The
+/// direction/size-handling pickers are `@AppStorage` in the view and already
+/// persist on their own, so they are not part of this.
+@MainActor
+final class CombineImagesSession: ObservableObject {
+    @Published var source = CombineSource.folder
+    @Published var folder: URL?
+    @Published var fileCount = 0
+    @Published var pickedFiles: [URL] = []
+    @Published var isRunning = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
+
+    var canCombine: Bool {
+        guard !isRunning else { return false }
+        return source == .folder ? folder != nil : !pickedFiles.isEmpty
+    }
+
+    func clear() {
+        guard !isRunning else { return }
+        source = .folder
+        folder = nil
+        fileCount = 0
+        pickedFiles = []
+        status = ""
+        statusKind = .idle
+    }
+
+    func chooseFolder(directory: OutputDirectory) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = String(localized: "Choose", comment: "Confirm button in the folder picker")
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+
+        folder = chosen
+        fileCount = ImageStacker.candidates(in: chosen).count
+        // Folder mode keeps writing next to the sources, as it always has —
+        // only now it is visible and can be redirected.
+        directory.set(chosen)
+        status = ""
+        statusKind = .idle
+    }
+
+    func combine(direction: StackDirection, handling: SizeHandling, directory: OutputDirectory) {
+        guard canCombine else { return }
+
+        let target = directory.url
+        let files = source == .folder
+            ? (folder.map { ImageStacker.candidates(in: $0) } ?? [])
+            : pickedFiles
+
+        isRunning = true
+        statusKind = .working
+        status = String(localized: "Combining…")
+
+        Task {
+            let result = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let output = try ImageStacker.stack(
+                            files: files,
+                            into: target,
+                            direction: direction,
+                            handling: handling
+                        )
+                        continuation.resume(returning: Result<URL, Error>.success(output))
+                    } catch {
+                        continuation.resume(returning: Result<URL, Error>.failure(error))
+                    }
+                }
+            }
+
+            isRunning = false
+            switch result {
+            case .success(let output):
+                status = String(localized: "Finished: \(output.lastPathComponent)", comment: "Placeholder is the written file name")
+                statusKind = .success
+                if let folder { fileCount = ImageStacker.candidates(in: folder).count }
+            case .failure(let error):
+                status = error.localizedDescription
+                statusKind = .failure
+            }
+        }
+    }
+}
+
 struct CombineImagesView: View {
+    @ObservedObject var session: CombineImagesSession
     @StateObject private var directory = OutputDirectory(defaultsKey: "CombineImagesOutputDir")
 
     // Remembered like the output folder, so a chosen layout survives restarts.
     @AppStorage("CombineImagesDirection") private var directionRaw = StackDirection.vertical.rawValue
     @AppStorage("CombineImagesSizeHandling") private var handlingRaw = SizeHandling.whiteStart.rawValue
-
-    @State private var source = CombineSource.folder
-    @State private var folder: URL?
-    @State private var fileCount = 0
-    @State private var pickedFiles: [URL] = []
-    @State private var isRunning = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
 
     private var direction: StackDirection {
         StackDirection(rawValue: directionRaw) ?? .vertical
@@ -40,9 +122,8 @@ struct CombineImagesView: View {
         SizeHandling(rawValue: handlingRaw) ?? .whiteStart
     }
 
-    private var canCombine: Bool {
-        guard !isRunning else { return false }
-        return source == .folder ? folder != nil : !pickedFiles.isEmpty
+    private var canClear: Bool {
+        !session.isRunning && !(session.folder == nil && session.pickedFiles.isEmpty)
     }
 
     var body: some View {
@@ -56,44 +137,46 @@ struct CombineImagesView: View {
                     subtitle: "Joins JPEGs and PNGs into a single image — stacked into a tall one or lined up into a wide one."
                 )
 
-                Picker("Source", selection: $source) {
+                Picker("Source", selection: $session.source) {
                     ForEach(CombineSource.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
-                .disabled(isRunning)
+                .disabled(session.isRunning)
 
-                if source == .folder {
+                if session.source == .folder {
                     FolderRow(
-                        folder: folder,
-                        detail: folder == nil
+                        folder: session.folder,
+                        detail: session.folder == nil
                             ? nil
                             : String(
-                                localized: "\(fileCount) images found, in name order",
+                                localized: "\(session.fileCount) images found, in name order",
                                 comment: "Count of images in the chosen folder"
                               ),
-                        isEnabled: !isRunning,
-                        onChoose: chooseFolder
+                        isEnabled: !session.isRunning,
+                        onChoose: { session.chooseFolder(directory: directory) }
                     )
                 } else {
                     FileListEditor(
-                        files: $pickedFiles,
+                        files: $session.pickedFiles,
                         allowedExtensions: ImageStacker.acceptedExtensions,
                         emptyMessage: "No images selected. Add some — the order you put them in is the order they are combined.",
                         addTitle: "Add Images…",
-                        isEnabled: !isRunning
+                        isEnabled: !session.isRunning
                     )
                 }
 
                 layoutOptions
 
-                OutputDirectoryRow(directory: directory, isEnabled: !isRunning)
+                OutputDirectoryRow(directory: directory, isEnabled: !session.isRunning)
 
                 HStack(spacing: 12) {
-                    Button("Combine") { combine() }
+                    Button("Combine") { session.combine(direction: direction, handling: handling, directory: directory) }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!canCombine)
-                    StatusLine(text: status, kind: statusKind)
+                        .disabled(!session.canCombine)
+                    Button("Clear") { session.clear() }
+                        .disabled(!canClear)
+                    StatusLine(text: session.status, kind: session.statusKind)
                 }
             }
             .padding(20)
@@ -130,67 +213,6 @@ struct CombineImagesView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .disabled(isRunning)
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = String(localized: "Choose", comment: "Confirm button in the folder picker")
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-
-        folder = chosen
-        fileCount = ImageStacker.candidates(in: chosen).count
-        // Folder mode keeps writing next to the sources, as it always has —
-        // only now it is visible and can be redirected.
-        directory.set(chosen)
-        status = ""
-        statusKind = .idle
-    }
-
-    private func combine() {
-        guard canCombine else { return }
-
-        let target = directory.url
-        let chosenDirection = direction
-        let chosenHandling = handling
-        let files = source == .folder
-            ? (folder.map { ImageStacker.candidates(in: $0) } ?? [])
-            : pickedFiles
-
-        isRunning = true
-        statusKind = .working
-        status = String(localized: "Combining…")
-
-        Task {
-            let result = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        let output = try ImageStacker.stack(
-                            files: files,
-                            into: target,
-                            direction: chosenDirection,
-                            handling: chosenHandling
-                        )
-                        continuation.resume(returning: Result<URL, Error>.success(output))
-                    } catch {
-                        continuation.resume(returning: Result<URL, Error>.failure(error))
-                    }
-                }
-            }
-
-            isRunning = false
-            switch result {
-            case .success(let output):
-                status = String(localized: "Finished: \(output.lastPathComponent)", comment: "Placeholder is the written file name")
-                statusKind = .success
-                if let folder { fileCount = ImageStacker.candidates(in: folder).count }
-            case .failure(let error):
-                status = error.localizedDescription
-                statusKind = .failure
-            }
-        }
+        .disabled(session.isRunning)
     }
 }

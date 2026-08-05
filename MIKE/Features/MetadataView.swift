@@ -17,205 +17,31 @@
 import AppKit
 import SwiftUI
 
-struct MetadataView: View {
-    let onOpenTools: () -> Void
-
-    @EnvironmentObject private var tools: ToolRegistry
-
-    @State private var sourceFile: URL?
-    @State private var groups: [MetadataGroup] = []
-    @State private var hasReadEmpty = false
+/// Survives navigating away from and back to Metadata — see
+/// `ArticleExtractionSession` for why this is needed at all.
+@MainActor
+final class MetadataSession: ObservableObject {
+    @Published var sourceFile: URL?
+    @Published var groups: [MetadataGroup] = []
+    @Published var hasReadEmpty = false
 
     // Edit fields.
-    @State private var copyright = ""
-    @State private var artist = ""
-    @State private var imageDescription = ""
-    @State private var dateEnabled = false
-    @State private var date = Date()
-    @State private var latitudeText = ""
-    @State private var longitudeText = ""
+    @Published var copyright = ""
+    @Published var artist = ""
+    @Published var imageDescription = ""
+    @Published var dateEnabled = false
+    @Published var date = Date()
+    @Published var latitudeText = ""
+    @Published var longitudeText = ""
 
-    @State private var isWorking = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
+    @Published var isWorking = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
 
     // The confirmation shown when a `_original` backup is already present.
-    @State private var pendingAction: MetadataAction?
+    @Published var pendingAction: MetadataAction?
 
-    private var canEdit: Bool { tools.isAvailable(.exiftool) }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Metadata",
-                    subtitle: "Shows the EXIF, GPS and other metadata in an image. With exiftool installed, common fields can be edited and metadata removed."
-                )
-
-                FileRow(
-                    label: "Image file",
-                    file: sourceFile,
-                    isEnabled: !isWorking,
-                    onChoose: chooseFile,
-                    onClear: clearFile
-                )
-
-                if sourceFile != nil {
-                    displaySection
-                    Divider()
-                    editSection
-                    Divider()
-                    removeSection
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .confirmationDialog(
-            "A backup already exists",
-            isPresented: showingBackupConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Continue without a new backup") {
-                if let pendingAction { run(pendingAction) }
-                pendingAction = nil
-            }
-            Button("Cancel", role: .cancel) { pendingAction = nil }
-        } message: {
-            Text("An unedited original is already saved next to this file from an earlier run. It will be kept, and this change is written without a second backup.")
-        }
-    }
-
-    // MARK: - Display
-
-    @ViewBuilder
-    private var displaySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if groups.isEmpty {
-                if hasReadEmpty {
-                    Text("This image carries no readable metadata.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                ForEach(groups) { group in
-                    MetadataGroupView(group: group)
-                }
-            }
-        }
-    }
-
-    // MARK: - Edit
-
-    @ViewBuilder
-    private var editSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Edit")
-                .font(.headline)
-
-            if !canEdit {
-                unavailableNote(
-                    "Editing metadata needs exiftool."
-                )
-            }
-
-            Group {
-                LabeledField(label: "Copyright", text: $copyright)
-                LabeledField(label: "Artist", text: $artist)
-                LabeledField(label: "Description", text: $imageDescription)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle(isOn: $dateEnabled) {
-                        Text("Set capture date")
-                    }
-                    DatePicker(
-                        selection: $date,
-                        displayedComponents: [.date, .hourAndMinute]
-                    ) { EmptyView() }
-                    .labelsHidden()
-                    .disabled(!dateEnabled)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("GPS coordinates")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        TextField("Latitude", text: $latitudeText)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("Longitude", text: $longitudeText)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    Text("Decimal degrees, e.g. 47.3769 and 8.5417. South and West are negative.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .disabled(!canEdit || isWorking)
-
-            Text("Empty fields are left unchanged. Filled ones are written.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                Button("Apply changes") { start(.edit) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canEdit || isWorking)
-                StatusLine(text: status, kind: statusKind)
-            }
-        }
-    }
-
-    // MARK: - Remove
-
-    @ViewBuilder
-    private var removeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Remove")
-                .font(.headline)
-            Text("Removing writes the edited file and keeps the untouched original as a “_original” file next to it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if !canEdit {
-                unavailableNote("Removing metadata needs exiftool.")
-            }
-
-            HStack(spacing: 12) {
-                Button("Remove all metadata") { start(.removeAll) }
-                    .disabled(!canEdit || isWorking)
-                Button("Remove GPS only") { start(.removeGPS) }
-                    .disabled(!canEdit || isWorking)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    @ViewBuilder
-    private func unavailableNote(_ message: LocalizedStringKey) -> some View {
-        HStack(spacing: 4) {
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("Open Setup", action: onOpenTools)
-                .buttonStyle(.link)
-                .font(.caption)
-        }
-    }
-
-    // MARK: - Actions
-
-    private var showingBackupConfirm: Binding<Bool> {
-        Binding(
-            get: { pendingAction != nil },
-            set: { if !$0 { pendingAction = nil } }
-        )
-    }
-
-    private func chooseFile() {
+    func chooseFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -229,15 +55,24 @@ struct MetadataView: View {
         reloadMetadata()
     }
 
-    private func clearFile() {
+    func clear() {
+        guard !isWorking else { return }
         sourceFile = nil
         groups = []
         hasReadEmpty = false
+        copyright = ""
+        artist = ""
+        imageDescription = ""
+        dateEnabled = false
+        date = Date()
+        latitudeText = ""
+        longitudeText = ""
         status = ""
         statusKind = .idle
+        pendingAction = nil
     }
 
-    private func reloadMetadata() {
+    func reloadMetadata() {
         guard let sourceFile else { return }
         groups = ImageMetadata.read(from: sourceFile)
         hasReadEmpty = groups.isEmpty
@@ -245,7 +80,7 @@ struct MetadataView: View {
 
     /// Validates, then either runs straight away or asks first when a backup is
     /// already on disk.
-    private func start(_ action: MetadataAction) {
+    func start(_ action: MetadataAction, exiftool: URL?) {
         guard sourceFile != nil else { return }
 
         if action == .edit {
@@ -266,14 +101,14 @@ struct MetadataView: View {
         if MetadataWriter.backupExists(for: sourceFile) {
             pendingAction = action
         } else {
-            run(action)
+            run(action, exiftool: exiftool)
         }
     }
 
-    private func run(_ action: MetadataAction) {
-        guard let file = sourceFile, let exiftool = tools.status(for: .exiftool).url else { return }
+    func run(_ action: MetadataAction, exiftool: URL?) {
+        guard let file = sourceFile, let exiftool else { return }
 
-        // Snapshot the inputs so the background task never reads @State.
+        // Snapshot the inputs so the background task never reads @Published.
         let edits = currentEdits
         let work: (URL) throws -> ExifWriteOutcome
 
@@ -349,7 +184,7 @@ struct MetadataView: View {
         return edits
     }
 
-    private enum CoordinateInput {
+    enum CoordinateInput {
         case none
         case valid(Double, Double)
         case invalid
@@ -375,10 +210,199 @@ struct MetadataView: View {
     }
 }
 
-private enum MetadataAction {
+enum MetadataAction {
     case edit
     case removeAll
     case removeGPS
+}
+
+struct MetadataView: View {
+    let onOpenTools: () -> Void
+
+    @EnvironmentObject private var tools: ToolRegistry
+    @ObservedObject var session: MetadataSession
+
+    private var canEdit: Bool { tools.isAvailable(.exiftool) }
+
+    private var canClear: Bool { !session.isWorking && session.sourceFile != nil }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Metadata",
+                    subtitle: "Shows the EXIF, GPS and other metadata in an image. With exiftool installed, common fields can be edited and metadata removed."
+                )
+
+                HStack(spacing: 12) {
+                    FileRow(
+                        label: "Image file",
+                        file: session.sourceFile,
+                        isEnabled: !session.isWorking,
+                        onChoose: { session.chooseFile() },
+                        onClear: { session.clear() }
+                    )
+                    Spacer(minLength: 0)
+                    Button("Clear") { session.clear() }
+                        .disabled(!canClear)
+                }
+
+                if session.sourceFile != nil {
+                    displaySection
+                    Divider()
+                    editSection
+                    Divider()
+                    removeSection
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .confirmationDialog(
+            "A backup already exists",
+            isPresented: showingBackupConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Continue without a new backup") {
+                if let pendingAction = session.pendingAction {
+                    session.run(pendingAction, exiftool: tools.status(for: .exiftool).url)
+                }
+                session.pendingAction = nil
+            }
+            Button("Cancel", role: .cancel) { session.pendingAction = nil }
+        } message: {
+            Text("An unedited original is already saved next to this file from an earlier run. It will be kept, and this change is written without a second backup.")
+        }
+    }
+
+    // MARK: - Display
+
+    @ViewBuilder
+    private var displaySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if session.groups.isEmpty {
+                if session.hasReadEmpty {
+                    Text("This image carries no readable metadata.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ForEach(session.groups) { group in
+                    MetadataGroupView(group: group)
+                }
+            }
+        }
+    }
+
+    // MARK: - Edit
+
+    @ViewBuilder
+    private var editSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit")
+                .font(.headline)
+
+            if !canEdit {
+                unavailableNote(
+                    "Editing metadata needs exiftool."
+                )
+            }
+
+            Group {
+                LabeledField(label: "Copyright", text: $session.copyright)
+                LabeledField(label: "Artist", text: $session.artist)
+                LabeledField(label: "Description", text: $session.imageDescription)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(isOn: $session.dateEnabled) {
+                        Text("Set capture date")
+                    }
+                    DatePicker(
+                        selection: $session.date,
+                        displayedComponents: [.date, .hourAndMinute]
+                    ) { EmptyView() }
+                    .labelsHidden()
+                    .disabled(!session.dateEnabled)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("GPS coordinates")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        TextField("Latitude", text: $session.latitudeText)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Longitude", text: $session.longitudeText)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Text("Decimal degrees, e.g. 47.3769 and 8.5417. South and West are negative.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!canEdit || session.isWorking)
+
+            Text("Empty fields are left unchanged. Filled ones are written.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Button("Apply changes") { session.start(.edit, exiftool: tools.status(for: .exiftool).url) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canEdit || session.isWorking)
+                StatusLine(text: session.status, kind: session.statusKind)
+            }
+        }
+    }
+
+    // MARK: - Remove
+
+    @ViewBuilder
+    private var removeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Remove")
+                .font(.headline)
+            Text("Removing writes the edited file and keeps the untouched original as a “_original” file next to it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !canEdit {
+                unavailableNote("Removing metadata needs exiftool.")
+            }
+
+            HStack(spacing: 12) {
+                Button("Remove all metadata") { session.start(.removeAll, exiftool: tools.status(for: .exiftool).url) }
+                    .disabled(!canEdit || session.isWorking)
+                Button("Remove GPS only") { session.start(.removeGPS, exiftool: tools.status(for: .exiftool).url) }
+                    .disabled(!canEdit || session.isWorking)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func unavailableNote(_ message: LocalizedStringKey) -> some View {
+        HStack(spacing: 4) {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Open Setup", action: onOpenTools)
+                .buttonStyle(.link)
+                .font(.caption)
+        }
+    }
+
+    // MARK: - Actions
+
+    private var showingBackupConfirm: Binding<Bool> {
+        Binding(
+            get: { session.pendingAction != nil },
+            set: { if !$0 { session.pendingAction = nil } }
+        )
+    }
 }
 
 // MARK: - Subviews

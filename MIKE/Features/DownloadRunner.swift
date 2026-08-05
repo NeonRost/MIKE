@@ -125,6 +125,18 @@ enum DownloadMode {
     case audio(format: AudioFormat, bitrate: Int?)
 }
 
+/// A time range to download instead of the whole video, via
+/// `--download-sections`. `start`/`end` are pre-validated `HH:MM:SS` text —
+/// validation happens once, at the moment the user presses Download, not on
+/// every keystroke. `end == nil` means "to the end of the video" (`inf`).
+/// Independent of `DownloadMode`: works the same whether combined with a
+/// video profile or an audio extraction, so it is threaded through
+/// `DownloadRunner.run` as its own parameter rather than folded into the mode.
+struct DownloadSection: Sendable {
+    let start: String
+    let end: String?
+}
+
 enum DownloadOutcome {
     case finished
     case cancelled
@@ -146,6 +158,7 @@ enum DownloadRunner {
         urlString: String,
         into directory: URL,
         mode: DownloadMode,
+        section: DownloadSection? = nil,
         ytDlp: URL,
         ffmpeg: URL?,
         onStart: ((Process) -> Void)? = nil,
@@ -160,7 +173,9 @@ enum DownloadRunner {
         let template = directory.appendingPathComponent("%(title)s.%(ext)s").path
 
         // Argument order matches the original, including --ffmpeg-location
-        // sitting in front of -f.
+        // sitting in front of -f. --download-sections applies the same way to
+        // either mode, so it is appended once after the mode-specific flags
+        // rather than duplicated into both branches below.
         var arguments: [String] = []
         if let ffmpeg {
             arguments += ["--ffmpeg-location", ffmpeg.path]
@@ -175,11 +190,6 @@ enum DownloadRunner {
                 "-o", template,
                 "--newline",
                 "--no-colors",
-                // Ends option parsing. Without it a string beginning with a dash
-                // would be read as an option — and yt-dlp has options such as
-                // --exec that run shell commands.
-                "--",
-                urlString,
             ]
         case .audio(let format, let bitrate):
             // A concrete bitrate (from a real probe) is passed as e.g. "128K" —
@@ -193,10 +203,18 @@ enum DownloadRunner {
                 "-o", template,
                 "--newline",
                 "--no-colors",
-                "--",
-                urlString,
             ]
         }
+        if let section {
+            arguments += ["--download-sections", "*\(section.start)-\(section.end ?? "inf")"]
+        }
+        arguments += [
+            // Ends option parsing. Without it a string beginning with a dash
+            // would be read as an option — and yt-dlp has options such as
+            // --exec that run shell commands.
+            "--",
+            urlString,
+        ]
 
         var environment = ProcessInfo.processInfo.environment
         // Progress parsing depends on a decimal point.
@@ -296,6 +314,35 @@ enum DownloadRunner {
                 try? manager.removeItem(atPath: path)
             }
         }
+    }
+
+    /// The video's total duration in seconds, straight from yt-dlp's own
+    /// `--print duration` — a plain number (e.g. `635`), not `HH:MM:SS`; the
+    /// caller formats it for display.
+    ///
+    /// `--no-warnings`/`--no-playlist` match `FormatProbe`'s own call for the
+    /// same reason: `standardError` is merged into the same pipe as
+    /// `standardOutput` (see `ProcessRunner.capture`), so a warning line
+    /// (which can slip through even with `--no-warnings` — some come from
+    /// extractor code paths it does not cover) lands right next to the
+    /// number. A real failure reproduced this exactly: the plain
+    /// `Double(wholeOutput)` parse this used to do broke the instant a
+    /// warning line was present, even though the number itself printed
+    /// correctly. Scanning line by line for the first parseable number
+    /// — the same shape of fix `FormatProbe` already needed for its own
+    /// JSON line — finds it regardless of what else got printed around it.
+    static func fetchDuration(urlString: String, ytDlp: URL) -> TimeInterval? {
+        guard let result = ProcessRunner.capture(
+            executable: ytDlp,
+            arguments: ["--print", "duration", "--no-warnings", "--no-playlist", "--", urlString],
+            timeout: 20
+        ), result.status == 0 else { return nil }
+        for line in result.output.split(whereSeparator: \.isNewline) {
+            if let value = Double(line.trimmingCharacters(in: .whitespaces)) {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func looksLikeFFmpegProgress(_ line: String) -> Bool {

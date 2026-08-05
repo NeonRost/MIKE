@@ -29,8 +29,14 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case metadata
     case embedded
     case combineVideos
+    case trimVideo
     case tagEditor
     case trackSplitter
+    case hashCheck
+    case batchRename
+    case fileInfo
+    case findDuplicates
+    case compression
     case tools
 
     var id: Self { self }
@@ -49,8 +55,14 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .metadata: return "Metadata"
         case .embedded: return "Embedded"
         case .combineVideos: return "Combine Videos"
+        case .trimVideo: return "Trim Video"
         case .tagEditor: return "Tag Editor"
         case .trackSplitter: return "Track Splitter"
+        case .hashCheck: return "Hash Check"
+        case .batchRename: return "Batch Rename"
+        case .fileInfo: return "File Info"
+        case .findDuplicates: return "Find Duplicates"
+        case .compression: return "Compression"
         case .tools: return "Setup"
         }
     }
@@ -69,8 +81,14 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .metadata: return "tag"
         case .embedded: return "curlybraces"
         case .combineVideos: return "film"
+        case .trimVideo: return "scissors"
         case .tagEditor: return "music.note.list"
         case .trackSplitter: return "scissors"
+        case .hashCheck: return "checkmark.seal"
+        case .batchRename: return "pencil.and.list.clipboard"
+        case .fileInfo: return "info.circle"
+        case .findDuplicates: return "doc.on.doc"
+        case .compression: return "archivebox"
         case .tools: return "wrench.and.screwdriver"
         }
     }
@@ -79,14 +97,18 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     ///
     /// Metadata is deliberately absent: reading works through ImageIO without
     /// any external tool, and only the edit/remove parts need exiftool — those
-    /// grey themselves out, the way Convert Format does with cwebp.
+    /// grey themselves out, the way Convert Format does with cwebp. The whole
+    /// Files category needs none either: CryptoKit, Foundation and, for
+    /// Compression, the bundled SWCompression/ZIPFoundation SPM packages —
+    /// no external command-line tool anywhere in this category.
     var requiredTools: [Tool] {
         switch self {
         case .download: return [.ytDlp, .ffmpeg]
         case .combineVideos: return [.ffmpeg]
+        case .trimVideo: return [.ffmpeg]
         case .tagEditor: return [.ffmpeg]
         case .trackSplitter: return [.ffmpeg]
-        case .directLink, .extractArticle, .readImageText, .mergeTexts, .convertEncoding, .quickEdit, .combineImages, .convertFormat, .metadata, .embedded, .tools: return []
+        case .directLink, .extractArticle, .readImageText, .mergeTexts, .convertEncoding, .quickEdit, .combineImages, .convertFormat, .metadata, .embedded, .hashCheck, .batchRename, .fileInfo, .findDuplicates, .compression, .tools: return []
         }
     }
 }
@@ -100,6 +122,7 @@ enum SectionGroup: String, CaseIterable, Identifiable {
     case images
     case video
     case audio
+    case files
 
     var id: String { rawValue }
 
@@ -110,6 +133,7 @@ enum SectionGroup: String, CaseIterable, Identifiable {
         case .images: return "Images"
         case .video: return "Video"
         case .audio: return "Audio"
+        case .files: return "Files"
         }
     }
 
@@ -118,14 +142,35 @@ enum SectionGroup: String, CaseIterable, Identifiable {
         case .web: return [.download, .directLink]
         case .text: return [.extractArticle, .readImageText, .mergeTexts, .convertEncoding]
         case .images: return [.quickEdit, .combineImages, .convertFormat, .metadata, .embedded]
-        case .video: return [.combineVideos]
+        case .video: return [.combineVideos, .trimVideo]
         case .audio: return [.tagEditor, .trackSplitter]
+        case .files: return [.hashCheck, .batchRename, .fileInfo, .findDuplicates, .compression]
         }
     }
 }
 
 struct RootView: View {
     @StateObject private var tools = ToolRegistry()
+    @StateObject private var articleExtractionSession = ArticleExtractionSession()
+    @StateObject private var downloadSession = DownloadSession()
+    @StateObject private var directLinkSession = DirectLinkSession()
+    @StateObject private var readImageTextSession = ReadImageTextSession()
+    @StateObject private var mergeTextsSession = MergeTextsSession()
+    @StateObject private var convertEncodingSession = ConvertEncodingSession()
+    @StateObject private var quickEditSession = QuickEditSession()
+    @StateObject private var combineImagesSession = CombineImagesSession()
+    @StateObject private var convertFormatSession = ConvertFormatSession()
+    @StateObject private var metadataSession = MetadataSession()
+    @StateObject private var embeddedMetadataSession = EmbeddedMetadataSession()
+    @StateObject private var combineVideosSession = CombineVideosSession()
+    @StateObject private var trimVideoSession = TrimVideoSession()
+    @StateObject private var tagEditorSession = TagEditorSession()
+    @StateObject private var trackSplitterSession = TrackSplitterSession()
+    @StateObject private var hashCheckSession = HashCheckSession()
+    @StateObject private var batchRenameSession = BatchRenameSession()
+    @StateObject private var fileInfoSession = FileInfoSession()
+    @StateObject private var findDuplicatesSession = FindDuplicatesSession()
+    @StateObject private var compressionSession = CompressionSession()
     @State private var selection: AppSection? = .download
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -174,33 +219,45 @@ struct RootView: View {
 
         switch selection ?? .download {
         case .download:
-            DownloadView(onOpenTools: openTools)
+            DownloadView(onOpenTools: openTools, session: downloadSession)
         case .directLink:
-            DirectLinkView()
+            DirectLinkView(session: directLinkSession)
         case .extractArticle:
-            ExtractArticleView()
+            ExtractArticleView(session: articleExtractionSession)
         case .readImageText:
-            ReadImageTextView()
+            ReadImageTextView(session: readImageTextSession)
         case .mergeTexts:
-            MergeTextsView()
+            MergeTextsView(session: mergeTextsSession)
         case .convertEncoding:
-            ConvertEncodingView()
+            ConvertEncodingView(session: convertEncodingSession)
         case .quickEdit:
-            QuickEditView(onOpenTools: openTools)
+            QuickEditView(onOpenTools: openTools, session: quickEditSession)
         case .combineImages:
-            CombineImagesView()
+            CombineImagesView(session: combineImagesSession)
         case .combineVideos:
-            CombineVideosView(onOpenTools: openTools)
+            CombineVideosView(onOpenTools: openTools, session: combineVideosSession)
+        case .trimVideo:
+            TrimVideoView(onOpenTools: openTools, session: trimVideoSession)
         case .tagEditor:
-            TagEditorView(onOpenTools: openTools)
+            TagEditorView(onOpenTools: openTools, session: tagEditorSession)
         case .trackSplitter:
-            TrackSplitterView(onOpenTools: openTools)
+            TrackSplitterView(onOpenTools: openTools, session: trackSplitterSession)
         case .convertFormat:
-            ConvertFormatView(onOpenTools: openTools)
+            ConvertFormatView(onOpenTools: openTools, session: convertFormatSession)
         case .metadata:
-            MetadataView(onOpenTools: openTools)
+            MetadataView(onOpenTools: openTools, session: metadataSession)
         case .embedded:
-            EmbeddedMetadataView(onOpenTools: openTools)
+            EmbeddedMetadataView(onOpenTools: openTools, session: embeddedMetadataSession)
+        case .hashCheck:
+            HashCheckView(session: hashCheckSession)
+        case .batchRename:
+            BatchRenameView(session: batchRenameSession)
+        case .fileInfo:
+            FileInfoView(session: fileInfoSession)
+        case .findDuplicates:
+            FindDuplicatesView(session: findDuplicatesSession)
+        case .compression:
+            CompressionView(session: compressionSession)
         case .tools:
             ToolsView()
         }

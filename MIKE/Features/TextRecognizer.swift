@@ -62,15 +62,6 @@ enum TextRecognizer {
         return value
     }
 
-    // MARK: - Clipboard
-
-    /// The clipboard's image bytes, in whatever representation is present.
-    /// `ImageConverter.load(from:)` reads either through ImageIO.
-    static func imageDataFromPasteboard() -> Data? {
-        let pasteboard = NSPasteboard.general
-        return pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff)
-    }
-
     // MARK: - Recognition
 
     /// Runs accurate text recognition and reconstructs paragraph and line

@@ -52,26 +52,158 @@ struct EditGroup: Identifiable {
     var addError: String?
 }
 
+/// Survives navigating away from and back to Embedded — see
+/// `ArticleExtractionSession` for why this is needed at all.
+@MainActor
+final class EmbeddedMetadataSession: ObservableObject {
+    @Published var sourceFile: URL?
+    @Published var groups: [EditGroup] = []
+    @Published var readResult: EmbeddedReadResult?
+    @Published var hasReadEmpty = false
+
+    @Published var isWorking = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
+    @Published var showBackupConfirm = false
+
+    func chooseFile(exiftool: URL?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        sourceFile = chosen
+        status = ""
+        statusKind = .idle
+        reload(exiftool: exiftool)
+    }
+
+    func clear() {
+        guard !isWorking else { return }
+        sourceFile = nil
+        groups = []
+        readResult = nil
+        hasReadEmpty = false
+        status = ""
+        statusKind = .idle
+        showBackupConfirm = false
+    }
+
+    func reload(exiftool: URL?) {
+        guard let sourceFile else { return }
+        let result = EmbeddedMetadata.read(from: sourceFile, exiftool: exiftool)
+        readResult = result
+        groups = result.groups.map(Self.editGroup(from:))
+        // "Empty" ignores the always-present, possibly-empty PNG text group.
+        hasReadEmpty = result.groups.allSatisfy { $0.entries.isEmpty }
+    }
+
+    private static func editGroup(from group: EmbeddedGroup) -> EditGroup {
+        EditGroup(
+            title: group.title,
+            kind: group.kind,
+            allowsAdditions: group.allowsAdditions,
+            rows: group.entries.map { entry in
+                EditRow(
+                    key: entry.key,
+                    originalValue: entry.rawValue,
+                    currentValue: entry.rawValue,
+                    writeTag: entry.writeTag,
+                    pngKeyword: entry.writeTag?.hasPrefix("PNG:") == true ? entry.key : nil,
+                    source: entry.source,
+                    kind: entry.kind,
+                    prettyValue: entry.prettyValue,
+                    byteSize: entry.byteSize,
+                    structured: entry.structured
+                )
+            }
+        )
+    }
+
+    var pendingOps: [EmbeddedWriteOp] {
+        var ops: [EmbeddedWriteOp] = []
+        for group in groups {
+            for row in group.rows {
+                guard let writeTag = row.writeTag else { continue }
+                if row.isNew {
+                    guard !row.deleted else { continue }
+                    let key = row.key.trimmingCharacters(in: .whitespaces)
+                    guard !key.isEmpty, !row.currentValue.isEmpty else { continue }
+                    ops.append(EmbeddedWriteOp(writeTag: "PNG:\(key)", pngKeyword: key, value: row.currentValue))
+                } else if row.deleted {
+                    ops.append(EmbeddedWriteOp(writeTag: writeTag, pngKeyword: row.pngKeyword, value: nil))
+                } else if row.isModified {
+                    ops.append(EmbeddedWriteOp(writeTag: writeTag, pngKeyword: row.pngKeyword, value: row.currentValue))
+                }
+            }
+        }
+        return ops
+    }
+
+    var hasPendingChanges: Bool { !pendingOps.isEmpty }
+    var pendingCount: Int { pendingOps.count }
+
+    func start(exiftool: URL?) {
+        guard let sourceFile, hasPendingChanges else { return }
+        if ExifToolWrite.backupExists(for: sourceFile) {
+            showBackupConfirm = true
+        } else {
+            performWrite(exiftool: exiftool)
+        }
+    }
+
+    func performWrite(exiftool: URL?) {
+        guard let file = sourceFile, let exiftool else { return }
+        let ops = pendingOps
+        guard !ops.isEmpty else { return }
+
+        isWorking = true
+        statusKind = .working
+        status = String(localized: "Writing…")
+
+        Task {
+            do {
+                let result = try await withCheckedThrowingContinuation { continuation in
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        do { continuation.resume(returning: try EmbeddedMetadataWriter.write(ops, to: file, exiftool: exiftool)) }
+                        catch { continuation.resume(throwing: error) }
+                    }
+                }
+                switch result {
+                case .updated(let backup):
+                    status = backup == .created
+                        ? String(localized: "Done. The original was saved as a “_original” file next to it.")
+                        : String(localized: "Done. The existing “_original” backup was left untouched.")
+                    statusKind = .success
+                    reload(exiftool: exiftool)
+                case .nothingToDo:
+                    status = String(localized: "Nothing changed.")
+                    statusKind = .idle
+                }
+            } catch {
+                status = error.localizedDescription
+                statusKind = .failure
+            }
+            isWorking = false
+        }
+    }
+}
+
 struct EmbeddedMetadataView: View {
     let onOpenTools: () -> Void
 
     @EnvironmentObject private var tools: ToolRegistry
-
-    @State private var sourceFile: URL?
-    @State private var groups: [EditGroup] = []
-    @State private var readResult: EmbeddedReadResult?
-    @State private var hasReadEmpty = false
-
-    @State private var isWorking = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
-    @State private var showBackupConfirm = false
+    @ObservedObject var session: EmbeddedMetadataSession
 
     /// Values longer than this are collapsed by default so a huge ComfyUI
     /// `workflow` does not unfurl thousands of lines at once.
     private static let longValueThreshold = 800
 
     private var canEdit: Bool { tools.isAvailable(.exiftool) }
+    private var exiftool: URL? { tools.status(for: .exiftool).url }
+
+    private var canClear: Bool { !session.isWorking && session.sourceFile != nil }
 
     var body: some View {
         ScrollView {
@@ -81,17 +213,22 @@ struct EmbeddedMetadataView: View {
                     subtitle: "Shows and edits embedded text blocks that the Metadata section does not: PNG text chunks, XMP packets and other blocks outside the EXIF group."
                 )
 
-                FileRow(
-                    label: "Image file",
-                    file: sourceFile,
-                    isEnabled: !isWorking,
-                    onChoose: chooseFile,
-                    onClear: clearFile
-                )
+                HStack(spacing: 12) {
+                    FileRow(
+                        label: "Image file",
+                        file: session.sourceFile,
+                        isEnabled: !session.isWorking,
+                        onChoose: { session.chooseFile(exiftool: exiftool) },
+                        onClear: { session.clear() }
+                    )
+                    Spacer(minLength: 0)
+                    Button("Clear") { session.clear() }
+                        .disabled(!canClear)
+                }
 
-                if sourceFile != nil {
+                if session.sourceFile != nil {
                     notes
-                    ForEach($groups) { $group in
+                    ForEach($session.groups) { $group in
                         GroupView(
                             group: $group,
                             canEdit: canEdit,
@@ -110,10 +247,10 @@ struct EmbeddedMetadataView: View {
         }
         .confirmationDialog(
             "A backup already exists",
-            isPresented: $showBackupConfirm,
+            isPresented: $session.showBackupConfirm,
             titleVisibility: .visible
         ) {
-            Button("Continue without a new backup") { performWrite() }
+            Button("Continue without a new backup") { session.performWrite(exiftool: exiftool) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("An unedited original is already saved next to this file from an earlier run. It will be kept, and this change is written without a second backup.")
@@ -124,7 +261,7 @@ struct EmbeddedMetadataView: View {
 
     @ViewBuilder
     private var notes: some View {
-        if let result = readResult {
+        if let result = session.readResult {
             switch result.format {
             case .unsupported:
                 infoNote("This format does not carry embedded text blocks of this kind.")
@@ -142,7 +279,7 @@ struct EmbeddedMetadataView: View {
             if let size = result.exifChunkByteSize {
                 infoNote("An eXIf chunk is present (\(byteString(size))). Its EXIF content is shown in the Metadata section.")
             }
-            if result.format == .png, hasReadEmpty {
+            if result.format == .png, session.hasReadEmpty {
                 infoNote("No embedded text blocks found. You can add one below.")
             }
         }
@@ -174,139 +311,15 @@ struct EmbeddedMetadataView: View {
     private var writeBar: some View {
         Divider()
         HStack(spacing: 12) {
-            Button("Write changes") { start() }
+            Button("Write changes") { session.start(exiftool: exiftool) }
                 .buttonStyle(.borderedProminent)
-                .disabled(isWorking || !hasPendingChanges)
-            if hasPendingChanges {
-                Text("\(pendingCount) pending")
+                .disabled(session.isWorking || !session.hasPendingChanges)
+            if session.hasPendingChanges {
+                Text("\(session.pendingCount) pending")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            StatusLine(text: status, kind: statusKind)
-        }
-    }
-
-    // MARK: - Actions
-
-    private func chooseFile() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        sourceFile = chosen
-        status = ""
-        statusKind = .idle
-        reload()
-    }
-
-    private func clearFile() {
-        sourceFile = nil
-        groups = []
-        readResult = nil
-        hasReadEmpty = false
-        status = ""
-        statusKind = .idle
-    }
-
-    private func reload() {
-        guard let sourceFile else { return }
-        let exiftool = tools.status(for: .exiftool).url
-        let result = EmbeddedMetadata.read(from: sourceFile, exiftool: exiftool)
-        readResult = result
-        groups = result.groups.map(editGroup(from:))
-        // "Empty" ignores the always-present, possibly-empty PNG text group.
-        hasReadEmpty = result.groups.allSatisfy { $0.entries.isEmpty }
-    }
-
-    private func editGroup(from group: EmbeddedGroup) -> EditGroup {
-        EditGroup(
-            title: group.title,
-            kind: group.kind,
-            allowsAdditions: group.allowsAdditions,
-            rows: group.entries.map { entry in
-                EditRow(
-                    key: entry.key,
-                    originalValue: entry.rawValue,
-                    currentValue: entry.rawValue,
-                    writeTag: entry.writeTag,
-                    pngKeyword: entry.writeTag?.hasPrefix("PNG:") == true ? entry.key : nil,
-                    source: entry.source,
-                    kind: entry.kind,
-                    prettyValue: entry.prettyValue,
-                    byteSize: entry.byteSize,
-                    structured: entry.structured
-                )
-            }
-        )
-    }
-
-    private var pendingOps: [EmbeddedWriteOp] {
-        var ops: [EmbeddedWriteOp] = []
-        for group in groups {
-            for row in group.rows {
-                guard let writeTag = row.writeTag else { continue }
-                if row.isNew {
-                    guard !row.deleted else { continue }
-                    let key = row.key.trimmingCharacters(in: .whitespaces)
-                    guard !key.isEmpty, !row.currentValue.isEmpty else { continue }
-                    ops.append(EmbeddedWriteOp(writeTag: "PNG:\(key)", pngKeyword: key, value: row.currentValue))
-                } else if row.deleted {
-                    ops.append(EmbeddedWriteOp(writeTag: writeTag, pngKeyword: row.pngKeyword, value: nil))
-                } else if row.isModified {
-                    ops.append(EmbeddedWriteOp(writeTag: writeTag, pngKeyword: row.pngKeyword, value: row.currentValue))
-                }
-            }
-        }
-        return ops
-    }
-
-    private var hasPendingChanges: Bool { !pendingOps.isEmpty }
-    private var pendingCount: Int { pendingOps.count }
-
-    private func start() {
-        guard let sourceFile, hasPendingChanges else { return }
-        if ExifToolWrite.backupExists(for: sourceFile) {
-            showBackupConfirm = true
-        } else {
-            performWrite()
-        }
-    }
-
-    private func performWrite() {
-        guard let file = sourceFile, let exiftool = tools.status(for: .exiftool).url else { return }
-        let ops = pendingOps
-        guard !ops.isEmpty else { return }
-
-        isWorking = true
-        statusKind = .working
-        status = String(localized: "Writing…")
-
-        Task {
-            do {
-                let result = try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do { continuation.resume(returning: try EmbeddedMetadataWriter.write(ops, to: file, exiftool: exiftool)) }
-                        catch { continuation.resume(throwing: error) }
-                    }
-                }
-                switch result {
-                case .updated(let backup):
-                    status = backup == .created
-                        ? String(localized: "Done. The original was saved as a “_original” file next to it.")
-                        : String(localized: "Done. The existing “_original” backup was left untouched.")
-                    statusKind = .success
-                    reload()
-                case .nothingToDo:
-                    status = String(localized: "Nothing changed.")
-                    statusKind = .idle
-                }
-            } catch {
-                status = error.localizedDescription
-                statusKind = .failure
-            }
-            isWorking = false
+            StatusLine(text: session.status, kind: session.statusKind)
         }
     }
 

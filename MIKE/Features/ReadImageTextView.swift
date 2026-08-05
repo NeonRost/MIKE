@@ -18,181 +18,36 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ReadImageTextView: View {
-    @State private var pickedFiles: [URL] = []
-    @State private var output = ""
-    @State private var isRunning = false
-    @State private var status = ""
-    @State private var statusKind = StatusLine.Kind.idle
-    @State private var task: Task<Void, Never>?
+/// Survives navigating away from and back to Read Image Text — see
+/// `ArticleExtractionSession` for why this is needed at all. `task` lives
+/// here too, so a batch still finishes and lands its result even if the
+/// section is not on screen when it completes.
+@MainActor
+final class ReadImageTextSession: ObservableObject {
+    @Published var pickedFiles: [URL] = []
+    @Published var output = ""
+    @Published var isRunning = false
+    @Published var status = ""
+    @Published var statusKind = StatusLine.Kind.idle
 
     /// 0 while a single clipboard image is being read — that path shows only
     /// the spinner, not the N-of-M bar.
-    @State private var currentIndex = 0
-    @State private var totalCount = 0
+    @Published var currentIndex = 0
+    @Published var totalCount = 0
 
-    @State private var isDropTargeted = false
+    private var task: Task<Void, Never>?
 
-    var body: some View {
-        // The ScrollView matters beyond overflow: without it the detail column
-        // sizes itself to the content's ideal height and spills out of the
-        // window instead of being clamped to it.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(
-                    title: "Read Image Text",
-                    subtitle: "Recognizes text in images with on-device text recognition. Needs no external tools."
-                )
-
-                fileSection
-                clipboardRow
-                runRow
-                resultSection
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    // MARK: - Input
-
-    @ViewBuilder
-    private var fileSection: some View {
-        FileListEditor(
-            files: $pickedFiles,
-            allowedExtensions: TextRecognizer.acceptedExtensions,
-            emptyMessage: "No images selected. Add some, or drag them in — text is read in the order they're listed.",
-            addTitle: "Add Images…",
-            isEnabled: !isRunning
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isDropTargeted ? Color.accentColor : .clear, lineWidth: 2)
-        )
-        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers)
-        }
-    }
-
-    @ViewBuilder
-    private var clipboardRow: some View {
-        HStack(spacing: 8) {
-            Button("Paste from Clipboard") { pasteFromClipboard() }
-                .disabled(isRunning)
-            Text("Reads an image straight from the clipboard — after Cmd-Shift-4, for instance.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private var runRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Button("Recognize Text") { startBatch() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isRunning || pickedFiles.isEmpty)
-                if isRunning {
-                    Button("Cancel") { stop() }
-                }
-                StatusLine(text: status, kind: statusKind)
-            }
-            if isRunning, totalCount > 1 {
-                ProgressView(value: Double(currentIndex), total: Double(totalCount))
-                    .frame(maxWidth: 260)
-            }
-        }
-    }
-
-    // MARK: - Output
-
-    @ViewBuilder
-    private var resultSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Result")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            // Editable on purpose, like Extract Article: the recognized text
-            // can be corrected before it is copied or saved. Disabled while a
-            // batch is running so progressive updates never clash with an
-            // in-progress edit.
-            TextEditor(text: $output)
-                .font(.system(.callout, design: .monospaced))
-                .frame(height: 280)
-                .disabled(isRunning)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(nsColor: .separatorColor))
-                )
-                .overlay(alignment: .topLeading) {
-                    if output.isEmpty {
-                        Text("Recognized text appears here.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 10)
-                            .allowsHitTesting(false)
-                    }
-                }
-
-            HStack(spacing: 12) {
-                Button("Copy") { WebURL.copyToClipboard(output) }
-                    .disabled(output.isEmpty)
-                Button("Save as TXT") { saveTXT() }
-                    .disabled(output.isEmpty)
-                Button("Save as Markdown") { saveMarkdown() }
-                    .disabled(output.isEmpty)
-                Button("Save as RTF") { saveRTF() }
-                    .disabled(output.isEmpty)
-            }
-            Text("Formatting such as bold or italic is not detected.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.top, 4)
-    }
-
-    // MARK: - Drag & drop
-
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !isRunning, !providers.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        // Collected on a lock, not `pickedFiles` directly: `loadItem`'s
-        // completion handlers arrive on an arbitrary queue, never the main
-        // actor.
-        let collected = Locked<[URL]>([])
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                let url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else {
-                    url = item as? URL
-                }
-                guard let url, TextRecognizer.acceptedExtensions.contains(url.pathExtension.lowercased())
-                else { return }
-                collected.withValue { $0.append(url) }
-            }
-        }
-
-        group.notify(queue: .main) {
-            for url in collected.value where !pickedFiles.contains(url) {
-                pickedFiles.append(url)
-            }
-        }
-        return true
-    }
-
-    // MARK: - Recognition
-
-    private func pasteFromClipboard() {
+    func clear() {
         guard !isRunning else { return }
-        guard let data = TextRecognizer.imageDataFromPasteboard() else {
+        pickedFiles = []
+        output = ""
+        status = ""
+        statusKind = .idle
+    }
+
+    func pasteFromClipboard() {
+        guard !isRunning else { return }
+        guard let data = ClipboardImage.data() else {
             status = String(localized: "No image in the clipboard.")
             statusKind = .idle
             return
@@ -230,7 +85,7 @@ struct ReadImageTextView: View {
         }
     }
 
-    private func startBatch() {
+    func startBatch() {
         guard !isRunning, !pickedFiles.isEmpty else { return }
         let files = pickedFiles
 
@@ -284,7 +139,7 @@ struct ReadImageTextView: View {
         }
     }
 
-    private func stop() {
+    func stop() {
         task?.cancel()
     }
 
@@ -325,30 +180,7 @@ struct ReadImageTextView: View {
         statusKind = .success
     }
 
-    // MARK: - Saving
-
-    private func saveTXT() {
-        save(suggestedName: "Recognized Text.txt", contentType: .plainText) { url in
-            try output.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-
-    private func saveMarkdown() {
-        save(suggestedName: "Recognized Text.md", contentType: UTType(filenameExtension: "md")!) { url in
-            try TextRecognizer.makeMarkdown(from: output).write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-
-    private func saveRTF() {
-        save(suggestedName: "Recognized Text.rtf", contentType: .rtf) { url in
-            guard let data = TextRecognizer.makeRTF(from: output) else {
-                throw CocoaError(.fileWriteUnknown)
-            }
-            try data.write(to: url)
-        }
-    }
-
-    private func save(suggestedName: String, contentType: UTType, writer: (URL) throws -> Void) {
+    func save(suggestedName: String, contentType: UTType, writer: (URL) throws -> Void) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.allowedContentTypes = [contentType]
@@ -365,6 +197,196 @@ struct ReadImageTextView: View {
         } catch {
             status = error.localizedDescription
             statusKind = .failure
+        }
+    }
+}
+
+struct ReadImageTextView: View {
+    @ObservedObject var session: ReadImageTextSession
+
+    @State private var isDropTargeted = false
+
+    private var canClear: Bool {
+        !session.isRunning && !(session.pickedFiles.isEmpty && session.output.isEmpty)
+    }
+
+    var body: some View {
+        // The ScrollView matters beyond overflow: without it the detail column
+        // sizes itself to the content's ideal height and spills out of the
+        // window instead of being clamped to it.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionHeader(
+                    title: "Read Image Text",
+                    subtitle: "Recognizes text in images with on-device text recognition. Needs no external tools."
+                )
+
+                fileSection
+                clipboardRow
+                runRow
+                resultSection
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: - Input
+
+    @ViewBuilder
+    private var fileSection: some View {
+        FileListEditor(
+            files: $session.pickedFiles,
+            allowedExtensions: TextRecognizer.acceptedExtensions,
+            emptyMessage: "No images selected. Add some, or drag them in — text is read in the order they're listed.",
+            addTitle: "Add Images…",
+            isEnabled: !session.isRunning
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isDropTargeted ? Color.accentColor : .clear, lineWidth: 2)
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    @ViewBuilder
+    private var clipboardRow: some View {
+        HStack(spacing: 8) {
+            Button("Paste from Clipboard") { session.pasteFromClipboard() }
+                .disabled(session.isRunning)
+            Text("Reads an image straight from the clipboard — after Cmd-Shift-4, for instance.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var runRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Button("Recognize Text") { session.startBatch() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(session.isRunning || session.pickedFiles.isEmpty)
+                if session.isRunning {
+                    Button("Cancel") { session.stop() }
+                }
+                Button("Clear") { session.clear() }
+                    .disabled(!canClear)
+                StatusLine(text: session.status, kind: session.statusKind)
+            }
+            if session.isRunning, session.totalCount > 1 {
+                ProgressView(value: Double(session.currentIndex), total: Double(session.totalCount))
+                    .frame(maxWidth: 260)
+            }
+        }
+    }
+
+    // MARK: - Output
+
+    @ViewBuilder
+    private var resultSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Result")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Editable on purpose, like Extract Article: the recognized text
+            // can be corrected before it is copied or saved. Disabled while a
+            // batch is running so progressive updates never clash with an
+            // in-progress edit.
+            TextEditor(text: $session.output)
+                .font(.system(.callout, design: .monospaced))
+                .frame(height: 280)
+                .disabled(session.isRunning)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor))
+                )
+                .overlay(alignment: .topLeading) {
+                    if session.output.isEmpty {
+                        Text("Recognized text appears here.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 10)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            HStack(spacing: 12) {
+                Button("Copy") { WebURL.copyToClipboard(session.output) }
+                    .disabled(session.output.isEmpty)
+                Button("Save as TXT") { saveTXT() }
+                    .disabled(session.output.isEmpty)
+                Button("Save as Markdown") { saveMarkdown() }
+                    .disabled(session.output.isEmpty)
+                Button("Save as RTF") { saveRTF() }
+                    .disabled(session.output.isEmpty)
+            }
+            Text("Formatting such as bold or italic is not detected.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - Drag & drop
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !session.isRunning, !providers.isEmpty else { return false }
+
+        let group = DispatchGroup()
+        // Collected on a lock, not `pickedFiles` directly: `loadItem`'s
+        // completion handlers arrive on an arbitrary queue, never the main
+        // actor.
+        let collected = Locked<[URL]>([])
+
+        for provider in providers {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else {
+                    url = item as? URL
+                }
+                guard let url, TextRecognizer.acceptedExtensions.contains(url.pathExtension.lowercased())
+                else { return }
+                collected.withValue { $0.append(url) }
+            }
+        }
+
+        group.notify(queue: .main) {
+            for url in collected.value where !session.pickedFiles.contains(url) {
+                session.pickedFiles.append(url)
+            }
+        }
+        return true
+    }
+
+    // MARK: - Saving
+
+    private func saveTXT() {
+        session.save(suggestedName: "Recognized Text.txt", contentType: .plainText) { url in
+            try session.output.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func saveMarkdown() {
+        session.save(suggestedName: "Recognized Text.md", contentType: UTType(filenameExtension: "md")!) { url in
+            try TextRecognizer.makeMarkdown(from: session.output).write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func saveRTF() {
+        session.save(suggestedName: "Recognized Text.rtf", contentType: .rtf) { url in
+            guard let data = TextRecognizer.makeRTF(from: session.output) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try data.write(to: url)
         }
     }
 }
