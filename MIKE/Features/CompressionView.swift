@@ -52,9 +52,14 @@ final class CompressionSession: ObservableObject {
 
     // MARK: Pack
 
+    /// Same convention as `ImageStacker`/`VideoConcatenator`'s own
+    /// `outputStem`: a fixed default name rather than one derived from the
+    /// first picked item.
+    static let defaultArchiveName = "compressed"
+
     @Published var packItems: [URL] = []
     @Published var packFormat = ArchiveFormat.zip
-    @Published var packArchiveName = ""
+    @Published var packArchiveName = CompressionSession.defaultArchiveName
     @Published var isPacking = false
     @Published var packProgress: Double = 0
     @Published var packStatus = ""
@@ -86,7 +91,7 @@ final class CompressionSession: ObservableObject {
         unpackStatusKind = .idle
 
         packItems = []
-        packArchiveName = ""
+        packArchiveName = Self.defaultArchiveName
         packStatus = ""
         packStatusKind = .idle
 
@@ -223,22 +228,15 @@ final class CompressionSession: ObservableObject {
         for url in panel.urls where !packItems.contains(url) {
             packItems.append(url)
         }
-        updateDefaultArchiveName()
     }
 
     func addPackItem(_ url: URL) {
         guard !packItems.contains(url) else { return }
         packItems.append(url)
-        updateDefaultArchiveName()
     }
 
     func removePackItem(_ url: URL) {
         packItems.removeAll { $0 == url }
-    }
-
-    private func updateDefaultArchiveName() {
-        guard packArchiveName.trimmingCharacters(in: .whitespaces).isEmpty, let first = packItems.first else { return }
-        packArchiveName = first.deletingPathExtension().lastPathComponent
     }
 
     var canPack: Bool {
