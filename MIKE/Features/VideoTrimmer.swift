@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import CoreGraphics
 import Foundation
 
 enum VideoTrimError: LocalizedError {
@@ -85,11 +86,17 @@ enum VideoTrimmer {
     /// Stream copy through `-ss`/`-to` *before* `-i` — faster than seeking
     /// after input, and with `-c copy` there is no re-encode to make up for
     /// the resulting keyframe-snap, so the tiny timing imprecision is the
-    /// accepted trade-off, not a bug.
+    /// accepted trade-off, not a bug. Cropping forces the opposite trade-off:
+    /// `cropRect`, when present, always re-encodes (see `cropArguments`
+    /// below) — `-ss`/`-to` before `-i` stays exactly where it is even then,
+    /// since it is still the fast path and, once a decoder is in the loop
+    /// for the crop filter anyway, ffmpeg trims frame-accurately from that
+    /// seek point regardless — the keyframe-snap only applies to `-c copy`.
     static func trim(
         input: URL,
         start: TimeInterval,
         end: TimeInterval,
+        cropRect: CGRect?,
         into directory: URL,
         ffmpeg: URL,
         onStart: ((Process) -> Void)? = nil,
@@ -98,7 +105,14 @@ enum VideoTrimmer {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let stem = "\(input.deletingPathExtension().lastPathComponent)_trim"
-        let target = ImageConverter.uniqueURL(directory: directory, stem: stem, extension: input.pathExtension)
+        // Cropping always re-encodes to H.264/AAC in MP4 (the same reasoning
+        // Download's own re-encode profiles use), regardless of the source
+        // container — AVI/WMV/FLV cannot reliably hold a copied source audio
+        // codec next to a freshly encoded H.264 video stream. A plain trim
+        // (no crop) keeps the source extension, unchanged from before.
+        let target = ImageConverter.uniqueURL(
+            directory: directory, stem: stem, extension: cropRect != nil ? "mp4" : input.pathExtension
+        )
         let clipLength = max(end - start, 0.001)
 
         var lastLines: [String] = []
@@ -110,7 +124,7 @@ enum VideoTrimmer {
                 "-ss", formatTimecode(start),
                 "-to", formatTimecode(end),
                 "-i", input.path,
-                "-c", "copy",
+            ] + cropArguments(for: cropRect) + [
                 target.path,
             ],
             onStart: { process in
@@ -136,6 +150,38 @@ enum VideoTrimmer {
         }
 
         return target
+    }
+
+    /// `nil` → lossless stream copy, unchanged from before crop existed.
+    /// Present → re-encodes with the crop baked in via `-vf`.
+    ///
+    /// Deliberately relies on ffmpeg's own default autorotate behaviour
+    /// (nothing here passes `-noautorotate`): ffmpeg has automatically
+    /// inserted the file's own rotation as the *first* filter in a manual
+    /// `-vf` chain since 4.4, specifically so a user-supplied filter such as
+    /// this `crop` always runs against the frame the way it is actually
+    /// displayed — never the raw, pre-rotation sensor frame. `cropRect` is
+    /// therefore expected in that same displayed (post-rotation) pixel
+    /// space, matching `TrimVideoSession.displaySize` and what the crop
+    /// overlay shows on the preview; nothing here needs to know or guess the
+    /// file's rotation angle itself.
+    ///
+    /// Width and height are floored to even numbers — required for 4:2:0
+    /// chroma subsampling (`yuv420p`); ffmpeg refuses an odd crop dimension
+    /// outright rather than rounding it itself.
+    private static func cropArguments(for cropRect: CGRect?) -> [String] {
+        guard let cropRect else { return ["-c", "copy"] }
+
+        let width = Int(cropRect.width.rounded()) & ~1
+        let height = Int(cropRect.height.rounded()) & ~1
+        let x = Int(cropRect.minX.rounded())
+        let y = Int(cropRect.minY.rounded())
+
+        return [
+            "-vf", "crop=\(width):\(height):\(x):\(y)",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k",
+        ]
     }
 
     /// Matches ffmpeg's own progress line, e.g. "...time=00:00:02.50...".

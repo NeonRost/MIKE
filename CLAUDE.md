@@ -1,12 +1,23 @@
 # MIKE
 
 MIKE – Mike's Toolbox. A macOS window app (SwiftUI, macOS 13+) that bundles
-thirteen utilities plus a Setup section: video download, TikTok direct link,
-article text extraction, image text recognition, text file merging, character
-encoding conversion, image stacking, image format conversion, image metadata
-viewing/editing, embedded-block viewing/editing, video concatenation, audio tag
-editing and audio track splitting. The sidebar groups them under Web, Text,
-Images, Video and Audio, with Setup pinned below.
+twenty-one utilities plus a Setup section, grouped in the sidebar as:
+
+- **Web**: video download, TikTok direct link
+- **Text**: article text extraction, image text recognition, text file
+  merging, character encoding conversion
+- **Images**: quick edit (straighten/crop/format convert/strip metadata),
+  image stacking, image format conversion, image metadata viewing/editing,
+  embedded-block viewing/editing
+- **Video**: video concatenation, video trimming (including an optional
+  crop)
+- **Audio**: audio tag editing, audio track splitting
+- **Files**: file hash checking, batch renaming, file info inspection,
+  duplicate finding, archive compression (ZIP/TAR.GZ)
+
+Setup is pinned below the categories rather than sitting inside one — it is
+not one of Mike's tools, just where their external dependencies get checked
+and installed.
 
 The Xcode project is generated from `project.yml` with XcodeGen and is committed
 to the repository. Regenerate with `xcodegen generate` after changing
@@ -641,3 +652,28 @@ must not wrap or truncate.
 `README.md` embeds `images/MIKE_Icon.png` and `images/MIKE_Screenshot.png`.
 **Preserve those embeds unchanged** when editing the file, and keep new images
 in `images/`.
+
+## Open items
+
+- **No standing-rules sections yet for the five Files-category tools**: Hash
+  Check, Batch Rename, File Info, Find Duplicates, and Compression. Every
+  other non-trivial section in this file earned its own subsection under
+  "Standing rules" documenting the non-obvious decisions and gotchas found
+  while building and verifying it (the `_original` backup rule, the
+  Convert Encoding constant-name traps, the audio container capability
+  matrix, and so on). These five tools almost certainly have comparable
+  decisions buried in their code — e.g. Compression's password-protection
+  detection workaround, its pinned SWCompression/BitByteData versions for
+  macOS 13 compatibility, or Batch Rename's conflict-detection rule — but
+  writing that up from a fresh read of the code would be guessing at which
+  details were actually load-bearing versus incidental. Deliberately left
+  unwritten here rather than filled in from assumption; add real subsections
+  once each tool's non-obvious behavior has been verified the way the
+  existing sections were, not reconstructed from reading the source once.
+- **Trim Video's crop addition is undocumented too**: the section above only
+  describes Trim Video's original cut-without-re-encoding behavior. The
+  optional crop (re-encodes to H.264/AAC, relies on ffmpeg's own autorotate
+  rather than hand-computing rotation) was added after that section was
+  written and never folded back into it — noticed while fixing the utility
+  count above, not chased down further; same "write it up once verified,
+  don't guess" rule applies.

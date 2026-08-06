@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		01AF2F1014A163EF5895A205 /* CropGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B98198BCF2132C08B5C2920D /* CropGeometry.swift */; };
 		06B5FE73CEAB53ED0E4E28F2 /* DownloadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA75008B9AA8B4EDCEEEF5A7 /* DownloadView.swift */; };
 		095BDC27E946612091E8A68B /* ArchiveConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D04EC394B01E6B624E31BC6 /* ArchiveConverter.swift */; };
 		0B80FFC21188C2EBF2B3FBDA /* RequirementBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6338C51325066508EB7D66F /* RequirementBanner.swift */; };
@@ -130,6 +131,7 @@
 		B575B8003C7DBAAD5B0D0967 /* BatchRenamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchRenamer.swift; sourceTree = "<group>"; };
 		B6139844E5A24F8A65AC043D /* ToolRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolRegistry.swift; sourceTree = "<group>"; };
 		B8BC915945C9128AC099E55B /* FileListEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileListEditor.swift; sourceTree = "<group>"; };
+		B98198BCF2132C08B5C2920D /* CropGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CropGeometry.swift; sourceTree = "<group>"; };
 		BA75008B9AA8B4EDCEEEF5A7 /* DownloadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadView.swift; sourceTree = "<group>"; };
 		BBD11CF5943F03D0019FD966 /* ArchiveBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveBuilder.swift; sourceTree = "<group>"; };
 		C0C8EB9D5C88CA3FF2D518EF /* AudioSplitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSplitter.swift; sourceTree = "<group>"; };
@@ -267,6 +269,7 @@
 		C14627CD7735CDAF00CFC30D /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				B98198BCF2132C08B5C2920D /* CropGeometry.swift */,
 				E230C246D967D938F3FA52B4 /* ExifToolWrite.swift */,
 				B8BC915945C9128AC099E55B /* FileListEditor.swift */,
 				E882881E4693202AF211A265 /* FileRow.swift */,
@@ -393,6 +396,7 @@
 				256AD534AEED1C8FCEEB50A8 /* CompressionView.swift in Sources */,
 				6B7AA7A6534D93D65A5C556B /* ConvertEncodingView.swift in Sources */,
 				549C4E22860A49989B6F4E2C /* ConvertFormatView.swift in Sources */,
+				01AF2F1014A163EF5895A205 /* CropGeometry.swift in Sources */,
 				47C23A3CEC5AA6EFF5D4BC6B /* DirectLinkView.swift in Sources */,
 				EB1EBA3C18E6D221334C8E52 /* DownloadRunner.swift in Sources */,
 				06B5FE73CEAB53ED0E4E28F2 /* DownloadView.swift in Sources */,

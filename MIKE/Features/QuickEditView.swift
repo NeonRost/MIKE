@@ -158,7 +158,7 @@ final class QuickEditSession: ObservableObject {
         let width = Double(cropWidthText) ?? cropRect.width
         let height = Double(cropHeightText) ?? cropRect.height
         let candidate = CGRect(x: x, y: y, width: width, height: height)
-        cropRect = CropCanvas.clamp(candidate, to: rotatedFullSize, minSize: Self.minCropSize)
+        cropRect = CropGeometry.clamp(candidate, to: rotatedFullSize, minSize: Self.minCropSize)
         syncCropFields()
     }
 
@@ -573,10 +573,6 @@ struct QuickEditView: View {
 
 // MARK: - Crop canvas
 
-private enum CropHandle: CaseIterable {
-    case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
-}
-
 /// The interactive canvas: shows the rotated preview, dims everything outside
 /// the crop frame, and lets the frame be resized (eight handles) or moved
 /// (drag inside). `cropRect` is always in full-resolution, post-rotation
@@ -629,7 +625,7 @@ private struct CropCanvas: View {
 
                 if isEnabled {
                     ForEach(Array(CropHandle.allCases.enumerated()), id: \.offset) { _, handle in
-                        let position = handlePosition(handle, in: displayRect)
+                        let position = CropGeometry.handlePosition(handle, in: displayRect)
                         Circle()
                             .fill(Color.white)
                             .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
@@ -649,26 +645,13 @@ private struct CropCanvas: View {
         return min(size.width / rotatedFullSize.width, size.height / rotatedFullSize.height)
     }
 
-    private func handlePosition(_ handle: CropHandle, in rect: CGRect) -> CGPoint {
-        switch handle {
-        case .topLeft: return CGPoint(x: rect.minX, y: rect.minY)
-        case .top: return CGPoint(x: rect.midX, y: rect.minY)
-        case .topRight: return CGPoint(x: rect.maxX, y: rect.minY)
-        case .right: return CGPoint(x: rect.maxX, y: rect.midY)
-        case .bottomRight: return CGPoint(x: rect.maxX, y: rect.maxY)
-        case .bottom: return CGPoint(x: rect.midX, y: rect.maxY)
-        case .bottomLeft: return CGPoint(x: rect.minX, y: rect.maxY)
-        case .left: return CGPoint(x: rect.minX, y: rect.midY)
-        }
-    }
-
     private func dragGesture(for handle: CropHandle, scale: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 if dragStartRect == nil { dragStartRect = cropRect }
                 guard let start = dragStartRect else { return }
                 let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                cropRect = Self.applyHandleDrag(handle, delta: delta, start: start, bounds: rotatedFullSize, minSize: minCropSize)
+                cropRect = CropGeometry.applyHandleDrag(handle, delta: delta, start: start, bounds: rotatedFullSize, minSize: minCropSize)
             }
             .onEnded { _ in dragStartRect = nil }
     }
@@ -682,58 +665,8 @@ private struct CropCanvas: View {
                 var rect = start
                 rect.origin.x += delta.width
                 rect.origin.y += delta.height
-                cropRect = Self.clamp(rect, to: rotatedFullSize, minSize: minCropSize)
+                cropRect = CropGeometry.clamp(rect, to: rotatedFullSize, minSize: minCropSize)
             }
             .onEnded { _ in dragStartRect = nil }
-    }
-
-    /// Resizes from a fixed opposite anchor: the edge(s) this handle does not
-    /// own are never reassigned, so they cannot move even if the drag
-    /// overshoots past them — verified against a real overshoot case rather
-    /// than assumed, since a naive "adjust both origin and size, then clamp
-    /// size to the minimum" approach lets the anchor edge drift.
-    static func applyHandleDrag(_ handle: CropHandle, delta: CGSize, start: CGRect, bounds: CGSize, minSize: CGFloat) -> CGRect {
-        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
-
-        func moveMinX(_ raw: CGFloat) { minX = min(max(raw, 0), maxX - minSize) }
-        func moveMaxX(_ raw: CGFloat) { maxX = max(min(raw, bounds.width), minX + minSize) }
-        func moveMinY(_ raw: CGFloat) { minY = min(max(raw, 0), maxY - minSize) }
-        func moveMaxY(_ raw: CGFloat) { maxY = max(min(raw, bounds.height), minY + minSize) }
-
-        switch handle {
-        case .topLeft:
-            moveMinX(start.minX + delta.width)
-            moveMinY(start.minY + delta.height)
-        case .top:
-            moveMinY(start.minY + delta.height)
-        case .topRight:
-            moveMaxX(start.maxX + delta.width)
-            moveMinY(start.minY + delta.height)
-        case .right:
-            moveMaxX(start.maxX + delta.width)
-        case .bottomRight:
-            moveMaxX(start.maxX + delta.width)
-            moveMaxY(start.maxY + delta.height)
-        case .bottom:
-            moveMaxY(start.maxY + delta.height)
-        case .bottomLeft:
-            moveMinX(start.minX + delta.width)
-            moveMaxY(start.maxY + delta.height)
-        case .left:
-            moveMinX(start.minX + delta.width)
-        }
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-    }
-
-    /// Clamps a rect (already the desired size) to stay within `bounds`,
-    /// preserving its width/height whenever there is room — used for moving
-    /// the whole frame and for numeric-field edits.
-    static func clamp(_ rect: CGRect, to bounds: CGSize, minSize: CGFloat) -> CGRect {
-        var result = rect
-        result.size.width = min(max(result.size.width, minSize), bounds.width)
-        result.size.height = min(max(result.size.height, minSize), bounds.height)
-        result.origin.x = min(max(result.origin.x, 0), bounds.width - result.size.width)
-        result.origin.y = min(max(result.origin.y, 0), bounds.height - result.size.height)
-        return result
     }
 }

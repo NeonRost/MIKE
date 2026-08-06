@@ -62,6 +62,18 @@ final class TrimVideoSession: ObservableObject {
     @Published var startText = "00:00:00.0"
     @Published var endText = "00:00:00.0"
 
+    /// The video's *displayed* pixel size — natural size with the track's
+    /// own rotation already applied — so the crop overlay lines up with what
+    /// the preview actually shows, not the raw sensor frame. `nil` until the
+    /// track has loaded, or if it never can (crop stays unavailable then,
+    /// same as the preview itself).
+    @Published var displaySize: CGSize?
+    @Published var cropEnabled = false
+    /// Always in `displaySize` coordinates — see `VideoTrimmer.cropArguments`
+    /// for why that is also exactly the space ffmpeg's own `-vf crop` needs.
+    @Published var cropRect: CGRect = .zero
+    static let minCropSize: CGFloat = 10
+
     @Published var isRunning = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
@@ -98,6 +110,9 @@ final class TrimVideoSession: ObservableObject {
         endTime = 0
         startText = "00:00:00.0"
         endText = "00:00:00.0"
+        displaySize = nil
+        cropEnabled = false
+        cropRect = .zero
         status = ""
         statusKind = .idle
         // Matches Combine Videos' folder mode: writes next to the source by
@@ -139,7 +154,31 @@ final class TrimVideoSession: ObservableObject {
             let newPlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             player = newPlayer
             observePlayback(newPlayer)
+
+            // The *displayed* size, not the raw encoded frame size: applying
+            // the track's own transform to its naturalSize is the standard,
+            // sign-agnostic way to get a track's on-screen bounding size
+            // regardless of rotation — the same computation AVPlayerLayer
+            // itself relies on to show the video upright. This sidesteps
+            // ever having to work out clockwise/counterclockwise by hand,
+            // which is exactly the kind of sign convention Quick Edit's own
+            // rotation code got backwards once before.
+            guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return }
+            guard let naturalSize = try? await track.load(.naturalSize),
+                  let transform = try? await track.load(.preferredTransform)
+            else { return }
+            guard self.sourceFile == url else { return }
+            let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+            let size = CGSize(width: abs(rect.width), height: abs(rect.height))
+            guard size.width > 0, size.height > 0 else { return }
+            self.displaySize = size
+            self.cropRect = CGRect(origin: .zero, size: size)
         }
+    }
+
+    func resetCrop() {
+        guard let displaySize else { return }
+        cropRect = CGRect(origin: .zero, size: displaySize)
     }
 
     func clear() {
@@ -155,6 +194,9 @@ final class TrimVideoSession: ObservableObject {
         endTime = 0
         startText = "00:00:00.0"
         endText = "00:00:00.0"
+        displaySize = nil
+        cropEnabled = false
+        cropRect = .zero
         status = ""
         statusKind = .idle
     }
@@ -246,6 +288,7 @@ final class TrimVideoSession: ObservableObject {
         let start = startTime
         let end = endTime
         let target = directory.url
+        let crop = (cropEnabled && cropRect.width > 0 && cropRect.height > 0) ? cropRect : nil
 
         isRunning = true
         statusKind = .working
@@ -259,6 +302,7 @@ final class TrimVideoSession: ObservableObject {
                             input: sourceFile,
                             start: start,
                             end: end,
+                            cropRect: crop,
                             into: target,
                             ffmpeg: ffmpeg,
                             onStart: { process in
@@ -323,7 +367,7 @@ struct TrimVideoView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeader(
                     title: "Trim Video",
-                    subtitle: "Cuts a clip out of a video without re-encoding, so there is no quality loss."
+                    subtitle: "Cuts a clip out of a video without re-encoding, so there is no quality loss. Cropping the frame is also possible, but re-encodes, since a crop cannot be a plain stream copy."
                 )
 
                 if !isReady {
@@ -346,12 +390,19 @@ struct TrimVideoView: View {
 
                     if session.sourceFile != nil {
                         previewArea
+                        cropSection
                         timelineSection
                         fieldsSection
 
                         Text("Trim points snap to keyframes — the result may be off by a fraction of a second.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        if session.cropEnabled {
+                            Text("Cropping re-encodes the video (H.264/AAC in MP4), so trimming alone is no longer lossless while it is on.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
 
                         OutputDirectoryRow(directory: directory, isEnabled: !session.isRunning)
 
@@ -382,6 +433,14 @@ struct TrimVideoView: View {
         ZStack {
             if let player = session.player {
                 AVPlayerContainer(player: player)
+                if session.cropEnabled, let displaySize = session.displaySize {
+                    CropOverlay(
+                        displaySize: displaySize,
+                        cropRect: $session.cropRect,
+                        minCropSize: TrimVideoSession.minCropSize,
+                        isEnabled: !session.isRunning
+                    )
+                }
             } else if session.isCheckingPlayability {
                 ProgressView()
             } else {
@@ -400,6 +459,31 @@ struct TrimVideoView: View {
                 .frame(width: 20)
         }
         .disabled(session.player == nil)
+    }
+
+    // MARK: - Crop
+
+    @ViewBuilder
+    private var cropSection: some View {
+        if session.player != nil, let displaySize = session.displaySize {
+            HStack(spacing: 12) {
+                Toggle("Crop", isOn: $session.cropEnabled)
+                    .toggleStyle(.checkbox)
+                    .disabled(session.isRunning)
+
+                if session.cropEnabled {
+                    Text(
+                        "\(Int(session.cropRect.width.rounded()))×\(Int(session.cropRect.height.rounded())) of \(Int(displaySize.width))×\(Int(displaySize.height))",
+                        comment: "Placeholders: crop width, crop height, full video width, full video height, all in pixels"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Button("Reset Crop") { session.resetCrop() }
+                        .disabled(session.isRunning)
+                }
+            }
+        }
     }
 
     private var previewUnavailableHint: some View {
@@ -562,5 +646,103 @@ private struct TrimTimeline: View {
                     onSeek(endTime)
                 }
             }
+    }
+}
+
+// MARK: - Crop overlay
+
+/// The draggable crop frame, layered on top of `AVPlayerContainer`. Unlike
+/// Quick Edit's `CropCanvas` this draws no image of its own — the player
+/// behind it already renders the video — so it only needs the same
+/// letterbox math to line its frame and handles up with where
+/// `AVPlayerView`'s default `.resizeAspect` gravity actually draws the
+/// picture inside its bounds. `cropRect`/`displaySize` are both in the
+/// video's displayed (post-rotation) pixel space — see
+/// `TrimVideoSession.displaySize`'s doc comment.
+private struct CropOverlay: View {
+    let displaySize: CGSize
+    @Binding var cropRect: CGRect
+    let minCropSize: CGFloat
+    let isEnabled: Bool
+
+    @State private var dragStartRect: CGRect?
+
+    private let handleDiameter: CGFloat = 11
+
+    var body: some View {
+        GeometryReader { geo in
+            let scale = displayScale(for: geo.size)
+            let renderedSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
+            let origin = CGPoint(x: (geo.size.width - renderedSize.width) / 2, y: (geo.size.height - renderedSize.height) / 2)
+            let displayRect = CGRect(
+                x: origin.x + cropRect.origin.x * scale,
+                y: origin.y + cropRect.origin.y * scale,
+                width: cropRect.width * scale,
+                height: cropRect.height * scale
+            )
+
+            ZStack(alignment: .topLeading) {
+                // Even-odd fill: the outer rect minus the crop rect, dimmed —
+                // darkens everything outside the frame, leaves the inside
+                // clear, so the video keeps showing through unobstructed.
+                Path { path in
+                    path.addRect(CGRect(origin: .zero, size: geo.size))
+                    path.addRect(displayRect)
+                }
+                .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
+                .allowsHitTesting(false)
+
+                Rectangle()
+                    .strokeBorder(Color.white, lineWidth: 1.5)
+                    .frame(width: max(displayRect.width, 0), height: max(displayRect.height, 0))
+                    .position(x: displayRect.midX, y: displayRect.midY)
+                    .contentShape(Rectangle())
+                    .gesture(isEnabled ? moveGesture(scale: scale) : nil)
+
+                if isEnabled {
+                    ForEach(Array(CropHandle.allCases.enumerated()), id: \.offset) { _, handle in
+                        let position = CropGeometry.handlePosition(handle, in: displayRect)
+                        Circle()
+                            .fill(Color.white)
+                            .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
+                            .frame(width: handleDiameter, height: handleDiameter)
+                            .contentShape(Circle().inset(by: -8))
+                            .position(position)
+                            .gesture(dragGesture(for: handle, scale: scale))
+                    }
+                }
+            }
+            .clipped()
+        }
+    }
+
+    private func displayScale(for size: CGSize) -> CGFloat {
+        guard displaySize.width > 0, displaySize.height > 0, size.width > 0, size.height > 0 else { return 1 }
+        return min(size.width / displaySize.width, size.height / displaySize.height)
+    }
+
+    private func dragGesture(for handle: CropHandle, scale: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { value in
+                if dragStartRect == nil { dragStartRect = cropRect }
+                guard let start = dragStartRect else { return }
+                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
+                cropRect = CropGeometry.applyHandleDrag(handle, delta: delta, start: start, bounds: displaySize, minSize: minCropSize)
+            }
+            .onEnded { _ in dragStartRect = nil }
+    }
+
+    private func moveGesture(scale: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+            .onChanged { value in
+                if dragStartRect == nil { dragStartRect = cropRect }
+                guard let start = dragStartRect else { return }
+                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
+                var rect = start
+                rect.origin.x += delta.width
+                rect.origin.y += delta.height
+                cropRect = CropGeometry.clamp(rect, to: displaySize, minSize: minCropSize)
+            }
+            .onEnded { _ in dragStartRect = nil }
     }
 }

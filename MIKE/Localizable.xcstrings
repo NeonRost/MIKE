@@ -8190,6 +8190,58 @@
           }
         }
       }
+    },
+    "Cuts a clip out of a video without re-encoding, so there is no quality loss. Cropping the frame is also possible, but re-encodes, since a crop cannot be a plain stream copy.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schneidet einen Ausschnitt aus einem Video, ohne neu zu kodieren, also ohne Qualitätsverlust. Das Bildformat lässt sich ebenfalls beschneiden, dabei wird aber neu kodiert, da ein Formatschnitt kein reines Stream-Copy sein kann."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recorta un fragmento de un vídeo sin recodificar, así que no hay pérdida de calidad. También es posible recortar el encuadre, pero eso recodifica, ya que un recorte de encuadre no puede ser una simple copia de flujo."
+          }
+        }
+      }
+    },
+    "Cropping re-encodes the video (H.264/AAC in MP4), so trimming alone is no longer lossless while it is on.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Beschneiden kodiert das Video neu (H.264/AAC in MP4), daher ist auch das reine Schneiden nicht mehr verlustfrei, solange es aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El recorte de encuadre recodifica el vídeo (H.264/AAC en MP4), así que mientras está activo, ni siquiera el corte por sí solo es sin pérdidas."
+          }
+        }
+      }
+    },
+    "%lld×%lld of %lld×%lld": {
+      "comment": "Placeholders: crop width, crop height, full video width, full video height, all in pixels",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld×%lld von %lld×%lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld×%lld de %lld×%lld"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
