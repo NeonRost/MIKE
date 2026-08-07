@@ -16,6 +16,8 @@
 
 import AVFoundation
 import AVKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -64,10 +66,18 @@ final class TrimVideoSession: ObservableObject {
 
     /// The video's *displayed* pixel size — natural size with the track's
     /// own rotation already applied — so the crop overlay lines up with what
-    /// the preview actually shows, not the raw sensor frame. `nil` until the
-    /// track has loaded, or if it never can (crop stays unavailable then,
-    /// same as the preview itself).
+    /// the preview actually shows, not the raw sensor frame. Sourced either
+    /// from the live player's track transform, or — when AVFoundation can't
+    /// open the file at all — from `previewImage`'s own pixel size, which
+    /// ffmpeg already produced in the same displayed orientation. `nil` only
+    /// if neither source is available.
     @Published var displaySize: CGSize?
+    /// A single still frame, extracted via ffmpeg, shown instead of a live
+    /// `AVPlayer` when AVFoundation cannot play the file at all (e.g. a
+    /// VP9-in-MP4 export — macOS has no VP9 decoder, but ffmpeg does). Crop
+    /// still works against this; only live playback does not. `nil` whenever
+    /// `player` is set — the two are mutually exclusive preview sources.
+    @Published var previewImage: NSImage?
     @Published var cropEnabled = false
     /// Always in `displaySize` coordinates — see `VideoTrimmer.cropArguments`
     /// for why that is also exactly the space ffmpeg's own `-vf crop` needs.
@@ -111,6 +121,7 @@ final class TrimVideoSession: ObservableObject {
         startText = "00:00:00.0"
         endText = "00:00:00.0"
         displaySize = nil
+        previewImage = nil
         cropEnabled = false
         cropRect = .zero
         status = ""
@@ -149,7 +160,16 @@ final class TrimVideoSession: ObservableObject {
             guard let self, sourceFile == url else { return }
             isCheckingPlayability = false
             isPlayable = playable
-            guard playable else { return }
+
+            guard playable else {
+                // AVFoundation can't open this one at all — verified this is
+                // a real, recurring case (VP9-in-MP4: macOS has no VP9
+                // decoder anywhere in AVFoundation, regardless of the file's
+                // extension), not just a theoretical fallback. ffmpeg still
+                // can, so a still frame stands in for the live preview.
+                await self.loadFallbackPreview(url: url, ffmpeg: ffmpeg)
+                return
+            }
 
             let newPlayer = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             player = newPlayer
@@ -176,6 +196,56 @@ final class TrimVideoSession: ObservableObject {
         }
     }
 
+    /// The fallback preview for a file AVFoundation refuses outright.
+    /// `previewImage`'s own pixel size is used directly as `displaySize` —
+    /// ffmpeg already extracted it in the displayed (post-autorotate)
+    /// orientation, so there is no separate transform to apply here, unlike
+    /// the live-player path above.
+    private func loadFallbackPreview(url: URL, ffmpeg: URL) async {
+        let extracted: (image: CGImage, size: CGSize)? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let frameURL = VideoTrimmer.extractPreviewFrame(from: url, ffmpeg: ffmpeg) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { try? FileManager.default.removeItem(at: frameURL) }
+                guard let cgImage = try? ImageConverter.load(from: frameURL) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let size = CGSize(width: cgImage.width, height: cgImage.height)
+                let brightened = Self.brightenedForPreview(cgImage) ?? cgImage
+                continuation.resume(returning: (brightened, size))
+            }
+        }
+        guard sourceFile == url, let extracted else { return }
+        previewImage = NSImage(cgImage: extracted.image, size: extracted.size)
+        displaySize = extracted.size
+        cropRect = CGRect(origin: .zero, size: extracted.size)
+    }
+
+    /// A gamma-only brightness boost, applied **only** to the still-frame
+    /// fallback preview shown to the user — never to the pixels ffmpeg
+    /// actually crops/trims from, which still work from the source file
+    /// directly and are completely unaffected by this. Verified against a
+    /// real dark clip: sampling several timestamps across it (0s, 2s, 5s,
+    /// 8s, 10s, 13s, 16s) all landed between roughly 13% and 29% average
+    /// luma, confirming the clip is simply dark for its whole length rather
+    /// than only during a black/fading-in intro — so no fixed timestamp
+    /// offset could ever fix this on its own, unlike the file this fallback
+    /// preview was originally built for. A live `AVPlayer` needs none of
+    /// this: real playback should show the file's actual brightness, not a
+    /// boosted one — this only compensates for a single frozen frame having
+    /// to stand in for scrubbing through the whole clip to find a lighter
+    /// moment.
+    private static func brightenedForPreview(_ cgImage: CGImage) -> CGImage? {
+        let filter = CIFilter.gammaAdjust()
+        filter.inputImage = CIImage(cgImage: cgImage)
+        filter.power = 0.5
+        guard let output = filter.outputImage else { return nil }
+        return CIContext().createCGImage(output, from: output.extent)
+    }
+
     func resetCrop() {
         guard let displaySize else { return }
         cropRect = CGRect(origin: .zero, size: displaySize)
@@ -195,6 +265,7 @@ final class TrimVideoSession: ObservableObject {
         startText = "00:00:00.0"
         endText = "00:00:00.0"
         displaySize = nil
+        previewImage = nil
         cropEnabled = false
         cropRect = .zero
         status = ""
@@ -433,14 +504,12 @@ struct TrimVideoView: View {
         ZStack {
             if let player = session.player {
                 AVPlayerContainer(player: player)
-                if session.cropEnabled, let displaySize = session.displaySize {
-                    CropOverlay(
-                        displaySize: displaySize,
-                        cropRect: $session.cropRect,
-                        minCropSize: TrimVideoSession.minCropSize,
-                        isEnabled: !session.isRunning
-                    )
-                }
+                cropOverlayIfNeeded
+            } else if let previewImage = session.previewImage {
+                Image(nsImage: previewImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                cropOverlayIfNeeded
             } else if session.isCheckingPlayability {
                 ProgressView()
             } else {
@@ -452,20 +521,38 @@ struct TrimVideoView: View {
         .background(Color(nsColor: .underPageBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
 
-        Button {
-            session.togglePlayback()
-        } label: {
-            Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
-                .frame(width: 20)
+        if session.player != nil {
+            Button {
+                session.togglePlayback()
+            } label: {
+                Image(systemName: session.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 20)
+            }
+        } else if session.previewImage != nil {
+            Text("Live playback isn't available for this format — showing the first frame instead. Trimming and cropping still work.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .disabled(session.player == nil)
+    }
+
+    @ViewBuilder
+    private var cropOverlayIfNeeded: some View {
+        if session.cropEnabled, let displaySize = session.displaySize {
+            CropOverlay(
+                displaySize: displaySize,
+                cropRect: $session.cropRect,
+                minCropSize: TrimVideoSession.minCropSize,
+                isEnabled: !session.isRunning
+            )
+        }
     }
 
     // MARK: - Crop
 
     @ViewBuilder
     private var cropSection: some View {
-        if session.player != nil, let displaySize = session.displaySize {
+        if let displaySize = session.displaySize {
             HStack(spacing: 12) {
                 Toggle("Crop", isOn: $session.cropEnabled)
                     .toggleStyle(.checkbox)

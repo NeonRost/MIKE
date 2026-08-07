@@ -8242,6 +8242,23 @@
           }
         }
       }
+    },
+    "Live playback isn't available for this format — showing the first frame instead. Trimming and cropping still work.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für dieses Format ist keine Live-Wiedergabe möglich — stattdessen wird das erste Bild gezeigt. Schneiden und Zuschneiden funktionieren trotzdem."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La reproducción en vivo no está disponible para este formato; se muestra el primer fotograma en su lugar. Cortar y recortar siguen funcionando."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

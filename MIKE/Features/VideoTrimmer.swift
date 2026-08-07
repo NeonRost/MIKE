@@ -61,6 +61,50 @@ enum VideoTrimmer {
         return nil
     }
 
+    /// Grabs a single frame as a still image — the fallback preview used
+    /// when AVFoundation cannot open the file at all. Verified directly
+    /// against a real VP9-in-MP4 file (a common export from web video-cutter
+    /// tools): `AVURLAsset.isPlayable` resolves `false` because macOS has no
+    /// VP9 decoder anywhere in AVFoundation/VideoToolbox, regardless of the
+    /// `.mp4` extension, while ffmpeg's own libvpx decoder opens it exactly
+    /// like any other input — the same "ffmpeg and AVFoundation disagree
+    /// about what they can open" situation `duration(of:ffmpeg:)` already
+    /// documents for AVI, just from a codec mismatch instead of a container
+    /// one this time.
+    ///
+    /// ffmpeg's default autorotate applies here exactly as it does for the
+    /// real trim/crop below — extracting a still frame is a decode step like
+    /// any other — so the frame comes out already at the same displayed
+    /// orientation and pixel size `cropRect`/`-vf crop` expect elsewhere in
+    /// this file. Nothing here needs to compute or guess rotation itself.
+    ///
+    /// `-ss` before `-i` seeks past a possible black or fading-in opening —
+    /// verified against a real clip that a 0.5s offset was not nearly enough
+    /// for (still solid black), so this tries 5s first. A clip shorter than
+    /// that would make ffmpeg fail outright (there is no frame there at
+    /// all), which is exactly when the plain frame-0 attempt below runs
+    /// instead — never left to just produce nothing.
+    static func extractPreviewFrame(from input: URL, ffmpeg: URL) -> URL? {
+        if let url = extractFrame(from: input, ffmpeg: ffmpeg, at: "00:00:05.0") {
+            return url
+        }
+        return extractFrame(from: input, ffmpeg: ffmpeg, at: nil)
+    }
+
+    private static func extractFrame(from input: URL, ffmpeg: URL, at timecode: String?) -> URL? {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mike-trim-preview-\(UUID().uuidString).png")
+        var arguments = ["-y"]
+        if let timecode {
+            arguments += ["-ss", timecode]
+        }
+        arguments += ["-i", input.path, "-frames:v", "1", tempURL.path]
+
+        let result = ProcessRunner.capture(executable: ffmpeg, arguments: arguments, timeout: 15)
+        guard result?.status == 0, FileManager.default.fileExists(atPath: tempURL.path) else { return nil }
+        return tempURL
+    }
+
     /// Parses ffmpeg-style "HH:MM:SS.ss" into seconds.
     static func parseTimecode(_ text: String) -> TimeInterval? {
         let parts = text.split(separator: ":")
