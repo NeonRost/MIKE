@@ -2,7 +2,7 @@
 
 <img src="images/MIKE_Icon.png" width="200" alt="MIKE Icon">
 
-A small macOS toolbox for everyday media chores. Twenty-one independent sections, picked from the sidebar:
+A small macOS toolbox for everyday media chores. Twenty tools, picked from the sidebar, plus a Setup section:
 
 - **Download** – fetches a video with `yt-dlp` and picks the right settings by site: YouTube and unknown hosts are re-encoded to H.264/AAC so they play in QuickTime and iMessage, TikTok and Instagram are only rewrapped and keep their original quality. Live progress, and the download folder is remembered. An "Audio only" switch extracts just the audio track (MP3, M4A, AAC, OPUS, FLAC, WAV or OGG). By default both video and audio downloads take whatever quality yt-dlp considers best; unchecking "Best available quality" asks the source what it actually offers for that specific URL and lets you pick a genuine resolution or bitrate from the real list — MIKE never invents a number the source can't back up.
 - **Direct Link** – turns a TikTok page URL into a direct link to the video file, copied to the clipboard straight away. Needs no external tools.

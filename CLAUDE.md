@@ -1,7 +1,7 @@
 # MIKE
 
 MIKE – Mike's Toolbox. A macOS window app (SwiftUI, macOS 13+) that bundles
-twenty-one utilities plus a Setup section, grouped in the sidebar as:
+twenty utilities plus a Setup section, grouped in the sidebar as:
 
 - **Web**: video download, TikTok direct link
 - **Text**: article text extraction, image text recognition, text file
