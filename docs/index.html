@@ -224,7 +224,10 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </p>
       </div>
       <div>
-        <img class="shot" src="images/MIKE_Screenshot.png" alt="The MIKE window showing its full sidebar and Quick Edit's crop handles">
+        <!-- Shares the Quick Edit captures with the Images card below rather
+             than keeping its own copy, so the hero can never drift out of
+             sync with the rest of the page's screenshots. -->
+        <img class="shot" data-hero-shot src="images/shot-quickedit-dark.png" alt="The MIKE window showing its full sidebar and Quick Edit's crop handles">
       </div>
     </div>
   </div>
@@ -412,10 +415,15 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
     });
   });
 
+  var heroShot = document.querySelector('[data-hero-shot]');
+
   function apply(){
     if (stored) { root.setAttribute('data-theme', stored); }
     else { root.removeAttribute('data-theme'); }
     cards.forEach(paintCard);
+    if (heroShot) {
+      heroShot.setAttribute('src', 'images/shot-quickedit-' + effective() + '.png');
+    }
   }
   document.getElementById('themeToggle').addEventListener('click', function(){
     stored = effective() === 'dark' ? 'light' : 'dark';
