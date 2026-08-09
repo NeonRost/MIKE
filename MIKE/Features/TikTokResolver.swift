@@ -63,10 +63,17 @@ enum TikTokResolver {
             "application/x-www-form-urlencoded; charset=UTF-8",
             forHTTPHeaderField: "Content-Type"
         )
+        // An ordered list, not a dictionary: Swift's `[String: String]`
+        // iteration order is randomized per process launch, which would
+        // shuffle these three fields on the wire on every run. ssstik.io (or
+        // whatever anti-bot layer sits in front of it) may fingerprint the
+        // exact field order a real browser sends — carried over unchanged
+        // from the original request shape, id/locale/tt, and now guaranteed
+        // to stay in that order instead of only usually landing in it.
         request.httpBody = formBody([
-            "id": tiktokURL,
-            "locale": "de",
-            "tt": "",
+            ("id", tiktokURL),
+            ("locale", "de"),
+            ("tt", ""),
         ])
 
         let data: Data
@@ -102,7 +109,7 @@ enum TikTokResolver {
         return String(body[captured])
     }
 
-    private static func formBody(_ fields: [String: String]) -> Data {
+    private static func formBody(_ fields: [(String, String)]) -> Data {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return fields
