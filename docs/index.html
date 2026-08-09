@@ -106,10 +106,30 @@ section{padding:78px 0}
 .card{display:flex;flex-direction:column}
 .card h3{margin:0 0 8px;font-size:18px}
 .card p{margin:0;color:var(--ink-soft);font-size:15px}
-.card .tools{margin:10px 0 0;font-size:13px;color:var(--ink-soft);opacity:.8}
+
+/* Each tool name is a button that swaps the card's screenshot. They still
+   read as a plain list of names until hovered, so the row keeps doing its
+   original job of naming what is in the group. */
+.tools{display:flex;flex-wrap:wrap;gap:4px 6px;margin:12px 0 0;padding:0;list-style:none}
+.tools button{
+  font:inherit;font-size:13px;line-height:1.3;
+  padding:3px 8px;border-radius:7px;cursor:pointer;
+  background:transparent;border:1px solid transparent;
+  color:var(--ink-soft);
+}
+.tools button:hover{border-color:var(--line);color:var(--ink)}
+.tools button[aria-pressed="true"]{
+  background:var(--blue-100);border-color:transparent;
+  color:var(--blue-700);font-weight:600;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .tools button[aria-pressed="true"]{background:#22405e;color:#bcd9f5}
+}
+:root[data-theme="dark"] .tools button[aria-pressed="true"]{background:#22405e;color:#bcd9f5}
+
 /* Screenshot sits under the text and is pushed to the card's bottom edge, so
    rows of cards line their images up even when the blurbs differ in length. */
-.card .shot-link{display:block;margin-top:18px;margin-bottom:0;line-height:0}
+.card .shot-link{display:block;margin-top:16px;margin-bottom:0;line-height:0}
 .card .shot-link:hover{text-decoration:none;opacity:.9}
 .card .shot-link img{
   width:100%;display:block;border-radius:9px;
@@ -219,76 +239,84 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
     </div>
 
     <div class="cards">
-      <div class="card">
+      <div class="card" data-card>
         <h3>Web</h3>
         <p>Fetch a video with the right settings picked automatically by site, or turn a TikTok page into a direct link on the clipboard.</p>
-        <p class="tools">Download · Direct Link</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="download" data-alt="The Download tool with a video URL entered and its quality options">Download</button></li>
+          <li><button type="button" data-tool="directlink" data-alt="Direct Link with a TikTok page URL ready to be resolved">Direct Link</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-web-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-web-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-web-light.png" alt="The Download tool with a video URL entered and its quality options" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-download-light.png">
+          <img src="images/shot-download-light.png" alt="The Download tool with a video URL entered and its quality options" loading="lazy">
         </a>
       </div>
-      <div class="card">
+      <div class="card" data-card>
         <h3>Text</h3>
         <p>Pull the readable text out of a web page, recognize text in a photo or screenshot, merge text files together, or convert between character encodings.</p>
-        <p class="tools">Extract Article · Read Image Text · Merge Texts · Convert Encoding</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="extractarticle" data-alt="Extract Article showing the readable text pulled out of a web page">Extract Article</button></li>
+          <li><button type="button" data-tool="readimagetext" data-alt="Read Image Text showing text recognized from a scanned note">Read Image Text</button></li>
+          <li><button type="button" data-tool="mergetexts" data-alt="Merge Texts combining three chapters into one document">Merge Texts</button></li>
+          <li><button type="button" data-tool="convertencoding" data-alt="Convert Encoding previewing a Latin-1 file decoded correctly">Convert Encoding</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-text-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-text-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-text-light.png" alt="Read Image Text showing text recognized from a scanned note" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-extractarticle-light.png">
+          <img src="images/shot-extractarticle-light.png" alt="Extract Article showing the readable text pulled out of a web page" loading="lazy">
         </a>
       </div>
-      <div class="card">
+      <div class="card" data-card>
         <h3>Images</h3>
         <p>Straighten, crop, convert and strip metadata in one pass, join images into one, convert between formats, and view or edit EXIF/GPS and embedded metadata.</p>
-        <p class="tools">Quick Edit · Combine Images · Convert Format · Metadata · Embedded</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="quickedit" data-alt="Quick Edit with its draggable crop frame over an image">Quick Edit</button></li>
+          <li><button type="button" data-tool="combineimages" data-alt="Combine Images set to join three images from a folder">Combine Images</button></li>
+          <li><button type="button" data-tool="convertformat" data-alt="Convert Format ready to convert an image to another format">Convert Format</button></li>
+          <li><button type="button" data-tool="metadata" data-alt="Metadata listing a photo's EXIF and GPS fields">Metadata</button></li>
+          <li><button type="button" data-tool="embedded" data-alt="Embedded showing the AI generation data stored in a PNG">Embedded</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-images-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-images-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-images-light.png" alt="Quick Edit with its draggable crop frame over an image" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-quickedit-light.png">
+          <img src="images/shot-quickedit-light.png" alt="Quick Edit with its draggable crop frame over an image" loading="lazy">
         </a>
       </div>
-      <div class="card">
+      <div class="card" data-card>
         <h3>Video</h3>
         <p>Join clips without re-encoding, or cut a clip down with a draggable timeline — optionally cropping the frame too, handy for black bars on a portrait recording.</p>
-        <p class="tools">Combine Videos · Trim Video</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="trimvideo" data-alt="Trim Video with start and end markers and the optional crop frame switched on">Trim Video</button></li>
+          <li><button type="button" data-tool="combinevideos" data-alt="Combine Videos set to join two clips from a folder">Combine Videos</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-video-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-video-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-video-light.png" alt="Trim Video with start and end markers and the optional crop frame switched on" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-trimvideo-light.png">
+          <img src="images/shot-trimvideo-light.png" alt="Trim Video with start and end markers and the optional crop frame switched on" loading="lazy">
         </a>
       </div>
-      <div class="card">
+      <div class="card" data-card>
         <h3>Audio</h3>
         <p>Read and write title, artist, cover art and the rest, or split one long recording into separate tracks at the silences between them.</p>
-        <p class="tools">Tag Editor · Track Splitter</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="tageditor" data-alt="Tag Editor showing a track's cover art and tag fields">Tag Editor</button></li>
+          <li><button type="button" data-tool="tracksplitter" data-alt="Track Splitter having found four tracks in one long recording">Track Splitter</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-audio-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-audio-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-audio-light.png" alt="Tag Editor showing a track's cover art and tag fields" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-tageditor-light.png">
+          <img src="images/shot-tageditor-light.png" alt="Tag Editor showing a track's cover art and tag fields" loading="lazy">
         </a>
       </div>
-      <div class="card">
+      <div class="card" data-card>
         <h3>Files</h3>
         <p>Verify checksums against an expected value, batch-rename with chainable rules, inspect a file's details, find duplicates, or pack and unpack ZIP/TAR.GZ archives.</p>
-        <p class="tools">Hash Check · Batch Rename · File Info · Find Duplicates · Compression</p>
+        <ul class="tools">
+          <li><button type="button" data-tool="hashcheck" data-alt="Hash Check confirming a file matches its expected SHA-256">Hash Check</button></li>
+          <li><button type="button" data-tool="batchrename" data-alt="Batch Rename previewing files renamed from their EXIF capture dates">Batch Rename</button></li>
+          <li><button type="button" data-tool="fileinfo" data-alt="File Info listing a file's size, type, permissions and extended attributes">File Info</button></li>
+          <li><button type="button" data-tool="findduplicates" data-alt="Find Duplicates having found three groups of identical files">Find Duplicates</button></li>
+          <li><button type="button" data-tool="compression" data-alt="Compression after unpacking a ZIP archive">Compression</button></li>
+        </ul>
         <div class="grow"></div>
-        <a class="shot-link" href="images/shot-files-dark.png">
-          <picture>
-            <source class="shot-dark" srcset="images/shot-files-dark.png" media="(prefers-color-scheme: dark)">
-            <img src="images/shot-files-light.png" alt="Hash Check confirming a file matches its expected SHA-256" loading="lazy">
-          </picture>
+        <a class="shot-link" href="images/shot-hashcheck-light.png">
+          <img src="images/shot-hashcheck-light.png" alt="Hash Check confirming a file matches its expected SHA-256" loading="lazy">
         </a>
       </div>
     </div>
@@ -353,19 +381,41 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
   function effective(){
     return stored ? stored : (systemDark.matches ? 'dark' : 'light');
   }
+  // Each card shows one tool's screenshot at a time, in the page's current
+  // theme. Both axes are resolved in script rather than by <picture> media
+  // queries: a media query can only follow the *system* setting, so it would
+  // ignore the toggle above, and swapping one <img> keeps the page from
+  // fetching all forty screenshots up front.
+  var cards = [].slice.call(document.querySelectorAll('[data-card]'));
+
+  function paintCard(card){
+    var active = card.querySelector('.tools button[aria-pressed="true"]')
+              || card.querySelector('.tools button');
+    if (!active) return;
+    var img = card.querySelector('.shot-link img');
+    var link = card.querySelector('.shot-link');
+    var src = 'images/shot-' + active.getAttribute('data-tool') + '-' + effective() + '.png';
+    if (img.getAttribute('src') !== src) { img.setAttribute('src', src); }
+    img.setAttribute('alt', active.getAttribute('data-alt'));
+    link.setAttribute('href', src);
+  }
+
+  cards.forEach(function(card){
+    var btns = [].slice.call(card.querySelectorAll('.tools button'));
+    btns.forEach(function(btn, i){
+      btn.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      btn.addEventListener('click', function(){
+        btns.forEach(function(b){ b.setAttribute('aria-pressed', 'false'); });
+        btn.setAttribute('aria-pressed', 'true');
+        paintCard(card);
+      });
+    });
+  });
+
   function apply(){
     if (stored) { root.setAttribute('data-theme', stored); }
     else { root.removeAttribute('data-theme'); }
-    // The dark screenshots are chosen by a media query, which only ever
-    // reflects the *system* setting — so a visitor's manual choice has to
-    // force each <source> on or off explicitly, otherwise the page switches
-    // theme while its screenshots stay in the other one.
-    var sources = document.querySelectorAll('source.shot-dark');
-    for (var i = 0; i < sources.length; i++) {
-      sources[i].media = stored
-        ? (stored === 'dark' ? 'all' : 'not all')
-        : '(prefers-color-scheme: dark)';
-    }
+    cards.forEach(paintCard);
   }
   document.getElementById('themeToggle').addEventListener('click', function(){
     stored = effective() === 'dark' ? 'light' : 'dark';
