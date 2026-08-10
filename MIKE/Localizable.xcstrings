@@ -8259,6 +8259,24 @@
           }
         }
       }
+    },
+    "Show or hide this operation's settings": {
+      "comment": "Accessibility label for the expander next to an operation's checkbox in Batch Rename",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen dieses Schritts ein- oder ausblenden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar u ocultar los ajustes de esta operación"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

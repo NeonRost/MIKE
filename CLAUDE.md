@@ -677,3 +677,14 @@ in `images/`.
   written and never folded back into it — noticed while fixing the utility
   count above, not chased down further; same "write it up once verified,
   don't guess" rule applies.
+- **Controls appear to reach the accessibility tree without a name.**
+  Enumerating the window with System Events reports every checkbox in the
+  app — Download's three options, Batch Rename's operations, Trim Video's
+  Crop — as having no `AXTitle` and no `AXDescription` attribute at all,
+  only a role. Adding an explicit `.accessibilityLabel` to Batch Rename's
+  operation toggles did not change that reading. Either SwiftUI carries the
+  name to VoiceOver by a route System Events cannot see, or the whole app
+  announces its controls unnamed; the two possibilities have very different
+  consequences and this measurement cannot tell them apart. Settle it with
+  Accessibility Inspector or VoiceOver itself before acting — and note that
+  it is app-wide, not specific to any one section.

@@ -445,14 +445,52 @@ private struct OperationBlock<Content: View>: View {
 
     @State private var expanded = true
 
+    /// The header is a hand-built row rather than a `DisclosureGroup`, and
+    /// that is the whole point: a `Toggle` placed in a `DisclosureGroup`'s
+    /// `label:` closure is not exposed to the accessibility layer at all.
+    /// Verified by enumerating the window's accessibility tree — with the
+    /// old structure, all six operation checkboxes and their titles were
+    /// missing outright, leaving only the two sub-options that live inside
+    /// the disclosure *content* ("Fall back to file modification date" and
+    /// "Case sensitive"). VoiceOver could therefore not switch a single
+    /// rename operation on or off, which made the section unusable. Splitting
+    /// the row into a real expander button plus a real `Toggle` puts both
+    /// back in the tree. Do not fold this back into a `DisclosureGroup`.
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            content()
-                .padding(.top, 8)
-                .disabled(!isEnabled)
-        } label: {
-            Toggle(isOn: $isEnabled) {
-                Text(title).font(.callout.bold())
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show or hide this operation's settings")
+
+                Toggle(isOn: $isEnabled) {
+                    Text(title).font(.callout.bold())
+                }
+                // Named explicitly rather than leaving it to the styled
+                // `Text` inside the toggle. Unverified, unlike the rest of
+                // this: System Events reports *every* checkbox in the app —
+                // including ones this change never touched — as carrying no
+                // AXTitle at all, so whether a name reaches VoiceOver is an
+                // app-wide question to settle with Accessibility Inspector,
+                // not something this file can answer on its own.
+                .accessibilityLabel(Text(title))
+            }
+
+            if expanded {
+                content()
+                    .padding(.top, 8)
+                    // Matches the indent DisclosureGroup gave the content
+                    // before, so the blocks still read the same way.
+                    .padding(.leading, 20)
+                    .disabled(!isEnabled)
             }
         }
         .disabled(isBusy)
