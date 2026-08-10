@@ -155,6 +155,16 @@ section{padding:78px 0}
   :root:not([data-theme="light"]) .theme-toggle .icon-sun{display:block}
 }
 
+/* Sprachauswahl */
+.lang-select{
+  height:34px;margin-left:8px;padding:0 8px;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.28);
+  border-radius:9px;color:#fff;cursor:pointer;font-size:13px;font-weight:600;
+  -webkit-appearance:none;appearance:none;
+}
+.lang-select:hover{background:rgba(255,255,255,.22)}
+.lang-select option{color:#000}
+
 .note{
   margin-top:24px;background:var(--card);border:1px solid var(--line);
   border-left:4px solid var(--blue-500);border-radius:12px;
@@ -195,32 +205,36 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
     <nav class="nav">
       <span class="brand"><img src="images/MIKE_Icon.png" alt="">MIKE</span>
       <span class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#details">Details</a>
+        <a href="#features" data-i18n="nav_features">Features</a>
+        <a href="#details" data-i18n="nav_details">Details</a>
         <a href="https://github.com/NeonRost/MIKE">GitHub</a>
         <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch between light and dark">
           <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
           <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
         </button>
+        <select class="lang-select" id="langSelect" aria-label="Select language">
+          <option value="en">🇬🇧 English</option>
+          <option value="de">🇩🇪 Deutsch</option>
+          <option value="es">🇪🇸 Español</option>
+        </select>
       </span>
     </nav>
 
     <div class="hero-grid">
       <div>
         <h1>MIKE – Mike's Toolbox</h1>
-        <p class="tagline">Twenty tools for everyday media chores, in one small Mac app.</p>
-        <p class="lede">
+        <p class="tagline" data-i18n="tagline">Twenty tools for everyday media chores, in one small Mac app.</p>
+        <p class="lede" data-i18n="lede">
           Download videos, edit and convert images, extract text, manage files, split and
           tag audio, pack and unpack archives — twenty independent tools, free and open
           source, no account, no tracking.
         </p>
         <div class="buttons">
-          <a class="btn btn-primary" href="https://github.com/NeonRost/MIKE/releases">Download</a>
-          <a class="btn btn-ghost" href="https://github.com/NeonRost/MIKE">View source</a>
+          <a class="btn btn-primary" href="https://github.com/NeonRost/MIKE/releases" data-i18n="btn_download">Download</a>
+          <a class="btn btn-ghost" href="https://github.com/NeonRost/MIKE" data-i18n="btn_source">View source</a>
         </div>
         <p class="fineprint">
-          macOS 13 Ventura or later · Apple Silicon ·
-          <a href="https://github.com/NeonRost/MIKE/blob/main/LICENSE">GPLv3</a>
+          <span data-i18n="fineprint">macOS 13 Ventura or later · Apple Silicon · </span><a href="https://github.com/NeonRost/MIKE/blob/main/LICENSE">GPLv3</a>
         </p>
       </div>
       <div>
@@ -237,14 +251,14 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
   <div class="wrap">
     <div class="section-head">
       <div class="rule"></div>
-      <h2>Six groups, twenty tools</h2>
-      <p>Every tool works on its own, picked straight from the sidebar. No project files, no setup screens — choose a tool and go.</p>
+      <h2 data-i18n="features_h2">Six groups, twenty tools</h2>
+      <p data-i18n="features_p">Every tool works on its own, picked straight from the sidebar. No project files, no setup screens — choose a tool and go.</p>
     </div>
 
     <div class="cards">
       <div class="card" data-card>
-        <h3>Web</h3>
-        <p>Fetch a video with the right settings picked automatically by site, or turn a TikTok page into a direct link on the clipboard.</p>
+        <h3 data-i18n="card_web_h3">Web</h3>
+        <p data-i18n="card_web_p">Fetch a video with the right settings picked automatically by site, or turn a TikTok page into a direct link on the clipboard.</p>
         <ul class="tools">
           <li><button type="button" data-tool="download" data-alt="The Download tool with a video URL entered and its quality options">Download</button></li>
           <li><button type="button" data-tool="directlink" data-alt="Direct Link with a TikTok page URL ready to be resolved">Direct Link</button></li>
@@ -255,8 +269,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </a>
       </div>
       <div class="card" data-card>
-        <h3>Text</h3>
-        <p>Pull the readable text out of a web page, recognize text in a photo or screenshot, merge text files together, or convert between character encodings.</p>
+        <h3 data-i18n="card_text_h3">Text</h3>
+        <p data-i18n="card_text_p">Pull the readable text out of a web page, recognize text in a photo or screenshot, merge text files together, or convert between character encodings.</p>
         <ul class="tools">
           <li><button type="button" data-tool="extractarticle" data-alt="Extract Article showing the readable text pulled out of a web page">Extract Article</button></li>
           <li><button type="button" data-tool="readimagetext" data-alt="Read Image Text showing text recognized from a scanned note">Read Image Text</button></li>
@@ -269,8 +283,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </a>
       </div>
       <div class="card" data-card>
-        <h3>Images</h3>
-        <p>Straighten, crop, convert and strip metadata in one pass, join images into one, convert between formats, and view or edit EXIF/GPS and embedded metadata.</p>
+        <h3 data-i18n="card_images_h3">Images</h3>
+        <p data-i18n="card_images_p">Straighten, crop, convert and strip metadata in one pass, join images into one, convert between formats, and view or edit EXIF/GPS and embedded metadata.</p>
         <ul class="tools">
           <li><button type="button" data-tool="quickedit" data-alt="Quick Edit with its draggable crop frame over an image">Quick Edit</button></li>
           <li><button type="button" data-tool="combineimages" data-alt="Combine Images set to join three images from a folder">Combine Images</button></li>
@@ -284,8 +298,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </a>
       </div>
       <div class="card" data-card>
-        <h3>Video</h3>
-        <p>Join clips without re-encoding, or cut a clip down with a draggable timeline — optionally cropping the frame too, handy for black bars on a portrait recording.</p>
+        <h3 data-i18n="card_video_h3">Video</h3>
+        <p data-i18n="card_video_p">Join clips without re-encoding, or cut a clip down with a draggable timeline — optionally cropping the frame too, handy for black bars on a portrait recording.</p>
         <ul class="tools">
           <li><button type="button" data-tool="trimvideo" data-alt="Trim Video with start and end markers and the optional crop frame switched on">Trim Video</button></li>
           <li><button type="button" data-tool="combinevideos" data-alt="Combine Videos set to join two clips from a folder">Combine Videos</button></li>
@@ -296,8 +310,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </a>
       </div>
       <div class="card" data-card>
-        <h3>Audio</h3>
-        <p>Read and write title, artist, cover art and the rest, or split one long recording into separate tracks at the silences between them.</p>
+        <h3 data-i18n="card_audio_h3">Audio</h3>
+        <p data-i18n="card_audio_p">Read and write title, artist, cover art and the rest, or split one long recording into separate tracks at the silences between them.</p>
         <ul class="tools">
           <li><button type="button" data-tool="tageditor" data-alt="Tag Editor showing a track's cover art and tag fields">Tag Editor</button></li>
           <li><button type="button" data-tool="tracksplitter" data-alt="Track Splitter having found four tracks in one long recording">Track Splitter</button></li>
@@ -308,8 +322,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
         </a>
       </div>
       <div class="card" data-card>
-        <h3>Files</h3>
-        <p>Verify checksums against an expected value, batch-rename with chainable rules, inspect a file's details, find duplicates, or pack and unpack ZIP/TAR.GZ archives.</p>
+        <h3 data-i18n="card_files_h3">Files</h3>
+        <p data-i18n="card_files_p">Verify checksums against an expected value, batch-rename with chainable rules, inspect a file's details, find duplicates, or pack and unpack ZIP/TAR.GZ archives.</p>
         <ul class="tools">
           <li><button type="button" data-tool="hashcheck" data-alt="Hash Check confirming a file matches its expected SHA-256">Hash Check</button></li>
           <li><button type="button" data-tool="batchrename" data-alt="Batch Rename previewing files renamed from their EXIF capture dates">Batch Rename</button></li>
@@ -325,7 +339,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
     </div>
 
     <div class="note">
-      <p><strong>Nothing is ever overwritten.</strong> A second run of any tool writes <span style="font-family:ui-monospace,monospace">combined (2).jpg</span> rather than replacing the first, and edits that need a backup — like metadata changes — always keep the untouched original alongside.</p>
+      <p><strong data-i18n="note_title">Nothing is ever overwritten.</strong><span data-i18n="note_body1"> A second run of any tool writes </span><span style="font-family:ui-monospace,monospace">combined (2).jpg</span><span data-i18n="note_body2"> rather than replacing the first, and edits that need a backup — like metadata changes — always keep the untouched original alongside.</span></p>
     </div>
   </div>
 </section>
@@ -334,22 +348,22 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
   <div class="wrap">
     <div class="section-head">
       <div class="rule"></div>
-      <h2>Good to know</h2>
-      <p>A few practical details before you download.</p>
+      <h2 data-i18n="details_h2">Good to know</h2>
+      <p data-i18n="details_p">A few practical details before you download.</p>
     </div>
 
     <div class="facts">
       <div class="fact">
-        <h3>Three languages</h3>
-        <p>English, German and Spanish, picked automatically from your system language.</p>
+        <h3 data-i18n="fact1_h3">Three languages</h3>
+        <p data-i18n="fact1_p">English, German and Spanish, picked automatically from your system language.</p>
       </div>
       <div class="fact">
-        <h3>External tools stay external</h3>
-        <p><code style="font-size:13px">yt-dlp</code> and <code style="font-size:13px">ffmpeg</code> are never bundled — MIKE finds them on your system, so they stay current through your own package manager.</p>
+        <h3 data-i18n="fact2_h3">External tools stay external</h3>
+        <p><code style="font-size:13px">yt-dlp</code><span data-i18n="fact2_p1"> and </span><code style="font-size:13px">ffmpeg</code><span data-i18n="fact2_p2"> are never bundled — MIKE finds them on your system, so they stay current through your own package manager.</span></p>
       </div>
       <div class="fact">
-        <h3>No account, no tracking</h3>
-        <p>Everything runs locally. Nothing is uploaded anywhere unless a tool's whole purpose is fetching something from a URL you gave it.</p>
+        <h3 data-i18n="fact3_h3">No account, no tracking</h3>
+        <p data-i18n="fact3_p">Everything runs locally. Nothing is uploaded anywhere unless a tool's whole purpose is fetching something from a URL you gave it.</p>
       </div>
     </div>
   </div>
@@ -358,19 +372,19 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
 <section class="support">
   <div class="wrap">
     <div class="rule"></div>
-    <h2 style="font-size:30px;margin:0 0 12px">Free, and staying that way</h2>
-    <p>MIKE is free software under the GNU GPL v3. If it saved you some hassle, you can leave a tip.</p>
-    <a class="btn btn-kofi" href="https://ko-fi.com/neonrost">Buy me a coffee</a>
+    <h2 style="font-size:30px;margin:0 0 12px" data-i18n="support_h2">Free, and staying that way</h2>
+    <p data-i18n="support_p">MIKE is free software under the GNU GPL v3. If it saved you some hassle, you can leave a tip.</p>
+    <a class="btn btn-kofi" href="https://ko-fi.com/neonrost" data-i18n="btn_kofi">Buy me a coffee</a>
   </div>
 </section>
 
 <footer>
   <div class="wrap foot-grid">
-    <span>Copyright © <span id="copyrightYears">2026</span> NeonRost · Released under the GNU GPL v3</span>
+    <span><span data-i18n="footer_copy_pre">Copyright © </span><span id="copyrightYears">2026</span><span data-i18n="footer_copy_post"> NeonRost · Released under the GNU GPL v3</span></span>
     <span><a href="https://github.com/NeonRost/MIKE">GitHub</a> · <a href="https://github.com/NeonRost/MIKE/releases">Releases</a> · <a href="https://ko-fi.com/neonrost">Ko-fi</a></span>
   </div>
   <div class="wrap">
-    <p class="trademark">Mac® is a registered trademark of Apple Inc.</p>
+    <p class="trademark" data-i18n="trademark">Mac® is a registered trademark of Apple Inc.</p>
   </div>
 </footer>
 
@@ -441,6 +455,194 @@ footer{border-top:1px solid var(--line);padding:34px 0;font-size:14px;color:var(
   var years = document.getElementById('copyrightYears');
   if (years) {
     years.textContent = currentYear > startYear ? (startYear + '–' + currentYear) : String(startYear);
+  }
+})();
+
+(function(){
+  // Same shape as TOM's site: one dictionary per language, applied to every
+  // [data-i18n] element. The screenshots stay English on purpose — they show
+  // an English-language app — so their alt text is not translated either.
+  var translations = {
+    en: {
+      title: "MIKE – Mike's Toolbox · A small macOS toolbox for everyday media chores",
+      metaDescription: "Twenty independent tools for everyday media chores in one small Mac app: video download, image editing, text extraction, file utilities, archive compression and more. Free and open source, GPLv3.",
+      nav_features: "Features",
+      nav_details: "Details",
+      tagline: "Twenty tools for everyday media chores, in one small Mac app.",
+      lede: "Download videos, edit and convert images, extract text, manage files, split and tag audio, pack and unpack archives — twenty independent tools, free and open source, no account, no tracking.",
+      btn_download: "Download",
+      btn_source: "View source",
+      fineprint: "macOS 13 Ventura or later · Apple Silicon · ",
+      features_h2: "Six groups, twenty tools",
+      features_p: "Every tool works on its own, picked straight from the sidebar. No project files, no setup screens — choose a tool and go.",
+      card_web_h3: "Web",
+      card_web_p: "Fetch a video with the right settings picked automatically by site, or turn a TikTok page into a direct link on the clipboard.",
+      card_text_h3: "Text",
+      card_text_p: "Pull the readable text out of a web page, recognize text in a photo or screenshot, merge text files together, or convert between character encodings.",
+      card_images_h3: "Images",
+      card_images_p: "Straighten, crop, convert and strip metadata in one pass, join images into one, convert between formats, and view or edit EXIF/GPS and embedded metadata.",
+      card_video_h3: "Video",
+      card_video_p: "Join clips without re-encoding, or cut a clip down with a draggable timeline — optionally cropping the frame too, handy for black bars on a portrait recording.",
+      card_audio_h3: "Audio",
+      card_audio_p: "Read and write title, artist, cover art and the rest, or split one long recording into separate tracks at the silences between them.",
+      card_files_h3: "Files",
+      card_files_p: "Verify checksums against an expected value, batch-rename with chainable rules, inspect a file's details, find duplicates, or pack and unpack ZIP/TAR.GZ archives.",
+      note_title: "Nothing is ever overwritten.",
+      note_body1: " A second run of any tool writes ",
+      note_body2: " rather than replacing the first, and edits that need a backup — like metadata changes — always keep the untouched original alongside.",
+      details_h2: "Good to know",
+      details_p: "A few practical details before you download.",
+      fact1_h3: "Three languages",
+      fact1_p: "English, German and Spanish, picked automatically from your system language.",
+      fact2_h3: "External tools stay external",
+      fact2_p1: " and ",
+      fact2_p2: " are never bundled — MIKE finds them on your system, so they stay current through your own package manager.",
+      fact3_h3: "No account, no tracking",
+      fact3_p: "Everything runs locally. Nothing is uploaded anywhere unless a tool's whole purpose is fetching something from a URL you gave it.",
+      support_h2: "Free, and staying that way",
+      support_p: "MIKE is free software under the GNU GPL v3. If it saved you some hassle, you can leave a tip.",
+      btn_kofi: "Buy me a coffee",
+      footer_copy_pre: "Copyright © ",
+      footer_copy_post: " NeonRost · Released under the GNU GPL v3",
+      trademark: "Mac® is a registered trademark of Apple Inc.",
+      hero_shot_alt: "The MIKE window showing its full sidebar and Quick Edit's crop handles",
+      theme_toggle_label: "Switch between light and dark",
+      lang_select_label: "Select language"
+    },
+    de: {
+      title: "MIKE – Mike's Toolbox · Eine kleine macOS-Toolbox für den täglichen Medienkram",
+      metaDescription: "Zwanzig eigenständige Werkzeuge für den täglichen Medienkram in einer kleinen Mac-App: Video-Download, Bildbearbeitung, Textextraktion, Datei-Werkzeuge, Archivkompression und mehr. Kostenlos und quelloffen, GPLv3.",
+      nav_features: "Funktionen",
+      nav_details: "Details",
+      tagline: "Zwanzig Werkzeuge für den täglichen Medienkram, in einer kleinen Mac-App.",
+      lede: "Videos herunterladen, Bilder bearbeiten und umwandeln, Text extrahieren, Dateien verwalten, Audio schneiden und taggen, Archive packen und entpacken — zwanzig eigenständige Werkzeuge, kostenlos und quelloffen, ohne Konto, ohne Tracking.",
+      btn_download: "Herunterladen",
+      btn_source: "Quellcode ansehen",
+      fineprint: "macOS 13 Ventura oder neuer · Apple Silicon · ",
+      features_h2: "Sechs Gruppen, zwanzig Werkzeuge",
+      features_p: "Jedes Werkzeug funktioniert für sich, direkt aus der Seitenleiste gewählt. Keine Projektdateien, keine Einrichtungsdialoge — Werkzeug auswählen und loslegen.",
+      card_web_h3: "Web",
+      card_web_p: "Ein Video mit den passenden Einstellungen laden, je nach Seite automatisch gewählt, oder aus einer TikTok-Seite einen Direktlink in der Zwischenablage machen.",
+      card_text_h3: "Text",
+      card_text_p: "Den lesbaren Text aus einer Webseite holen, Text in einem Foto oder Screenshot erkennen, Textdateien zusammenführen oder zwischen Zeichensätzen umwandeln.",
+      card_images_h3: "Bilder",
+      card_images_p: "In einem Durchgang gerade richten, zuschneiden, umwandeln und Metadaten entfernen, Bilder zu einem verbinden, Formate umwandeln sowie EXIF/GPS und eingebettete Metadaten ansehen oder bearbeiten.",
+      card_video_h3: "Video",
+      card_video_p: "Clips ohne Neukodierung verbinden oder einen Clip an einer ziehbaren Zeitleiste kürzen — auf Wunsch auch das Bildformat beschneiden, praktisch bei schwarzen Balken einer Hochkantaufnahme.",
+      card_audio_h3: "Audio",
+      card_audio_p: "Titel, Interpret, Cover und den Rest lesen und schreiben oder eine lange Aufnahme an den Stillen dazwischen in einzelne Titel zerlegen.",
+      card_files_h3: "Dateien",
+      card_files_p: "Prüfsummen gegen einen erwarteten Wert abgleichen, mit verkettbaren Regeln stapelweise umbenennen, Dateidetails ansehen, Duplikate finden oder ZIP-/TAR.GZ-Archive packen und entpacken.",
+      note_title: "Nichts wird jemals überschrieben.",
+      note_body1: " Ein zweiter Durchlauf schreibt ",
+      note_body2: ", statt das erste Ergebnis zu ersetzen, und Änderungen, die eine Sicherung brauchen — etwa an Metadaten —, behalten immer das unangetastete Original daneben.",
+      details_h2: "Gut zu wissen",
+      details_p: "Ein paar praktische Details vor dem Herunterladen.",
+      fact1_h3: "Drei Sprachen",
+      fact1_p: "Englisch, Deutsch und Spanisch, automatisch anhand deiner Systemsprache gewählt.",
+      fact2_h3: "Externe Werkzeuge bleiben extern",
+      fact2_p1: " und ",
+      fact2_p2: " werden nie mitgeliefert — MIKE findet sie auf deinem System, so bleiben sie über deinen eigenen Paketmanager aktuell.",
+      fact3_h3: "Kein Konto, kein Tracking",
+      fact3_p: "Alles läuft lokal. Nichts wird irgendwohin hochgeladen, außer ein Werkzeug hat genau den Zweck, etwas von einer URL zu holen, die du angegeben hast.",
+      support_h2: "Kostenlos, und das bleibt so",
+      support_p: "MIKE ist freie Software unter der GNU GPL v3. Wenn es dir Arbeit erspart hat, kannst du einen Kaffee spendieren.",
+      btn_kofi: "Spendier mir einen Kaffee",
+      footer_copy_pre: "Copyright © ",
+      footer_copy_post: " NeonRost · Veröffentlicht unter der GNU GPL v3",
+      trademark: "Mac® ist eine eingetragene Marke von Apple Inc.",
+      hero_shot_alt: "Das MIKE-Fenster mit vollständiger Seitenleiste und den Zuschnitt-Griffen von Quick Edit",
+      theme_toggle_label: "Zwischen hell und dunkel wechseln",
+      lang_select_label: "Sprache auswählen"
+    },
+    es: {
+      title: "MIKE – Mike's Toolbox · Una pequeña caja de herramientas de macOS para las tareas multimedia del día a día",
+      metaDescription: "Veinte herramientas independientes para las tareas multimedia del día a día en una pequeña app para Mac: descarga de vídeo, edición de imágenes, extracción de texto, utilidades de archivos, compresión y más. Gratis y de código abierto, GPLv3.",
+      nav_features: "Funciones",
+      nav_details: "Detalles",
+      tagline: "Veinte herramientas para las tareas multimedia del día a día, en una pequeña app para Mac.",
+      lede: "Descarga vídeos, edita y convierte imágenes, extrae texto, gestiona archivos, divide y etiqueta audio, comprime y descomprime — veinte herramientas independientes, gratis y de código abierto, sin cuenta y sin rastreo.",
+      btn_download: "Descargar",
+      btn_source: "Ver el código",
+      fineprint: "macOS 13 Ventura o posterior · Apple Silicon · ",
+      features_h2: "Seis grupos, veinte herramientas",
+      features_p: "Cada herramienta funciona por su cuenta, elegida directamente en la barra lateral. Sin archivos de proyecto ni pantallas de configuración: elige una herramienta y adelante.",
+      card_web_h3: "Web",
+      card_web_p: "Descarga un vídeo con los ajustes adecuados, elegidos automáticamente según el sitio, o convierte una página de TikTok en un enlace directo en el portapapeles.",
+      card_text_h3: "Texto",
+      card_text_p: "Extrae el texto legible de una página web, reconoce texto en una foto o captura, une archivos de texto o convierte entre codificaciones de caracteres.",
+      card_images_h3: "Imágenes",
+      card_images_p: "Endereza, recorta, convierte y elimina metadatos en un solo paso, une imágenes en una, convierte entre formatos y consulta o edita EXIF/GPS y los metadatos incrustados.",
+      card_video_h3: "Vídeo",
+      card_video_p: "Une clips sin recodificar o recorta un clip con una línea de tiempo arrastrable — opcionalmente recortando también el encuadre, útil para las bandas negras de una grabación vertical.",
+      card_audio_h3: "Audio",
+      card_audio_p: "Lee y escribe título, artista, carátula y lo demás, o divide una grabación larga en pistas separadas por los silencios entre ellas.",
+      card_files_h3: "Archivos",
+      card_files_p: "Verifica sumas de comprobación con un valor esperado, renombra por lotes con reglas encadenables, consulta los detalles de un archivo, encuentra duplicados o comprime y descomprime archivos ZIP/TAR.GZ.",
+      note_title: "Nunca se sobrescribe nada.",
+      note_body1: " Una segunda ejecución escribe ",
+      note_body2: " en lugar de reemplazar la primera, y los cambios que necesitan una copia de seguridad — como los de metadatos — siempre conservan el original intacto al lado.",
+      details_h2: "Conviene saber",
+      details_p: "Algunos detalles prácticos antes de descargar.",
+      fact1_h3: "Tres idiomas",
+      fact1_p: "Inglés, alemán y español, elegidos automáticamente según el idioma de tu sistema.",
+      fact2_h3: "Las herramientas externas siguen siendo externas",
+      fact2_p1: " y ",
+      fact2_p2: " nunca se incluyen — MIKE los encuentra en tu sistema, así se mantienen al día con tu propio gestor de paquetes.",
+      fact3_h3: "Sin cuenta, sin rastreo",
+      fact3_p: "Todo se ejecuta localmente. No se sube nada a ninguna parte, salvo que el propósito mismo de una herramienta sea obtener algo de una URL que tú indicaste.",
+      support_h2: "Gratis, y así seguirá",
+      support_p: "MIKE es software libre bajo la GNU GPL v3. Si te ha ahorrado trabajo, puedes invitar a un café.",
+      btn_kofi: "Invítame a un café",
+      footer_copy_pre: "Copyright © ",
+      footer_copy_post: " NeonRost · Publicado bajo la GNU GPL v3",
+      trademark: "Mac® es una marca registrada de Apple Inc.",
+      hero_shot_alt: "La ventana de MIKE con toda su barra lateral y los tiradores de recorte de Quick Edit",
+      theme_toggle_label: "Cambiar entre claro y oscuro",
+      lang_select_label: "Seleccionar idioma"
+    }
+  };
+
+  var root = document.documentElement;
+  var select = document.getElementById('langSelect');
+  var themeToggle = document.getElementById('themeToggle');
+  var heroShot = document.querySelector('[data-hero-shot]');
+  var metaDesc = document.querySelector('meta[name="description"]');
+
+  function detectLang(){
+    try {
+      var stored = localStorage.getItem('mike-lang');
+      if (stored && translations[stored]) return stored;
+    } catch(e){}
+    var sys = (navigator.language || 'en').slice(0,2).toLowerCase();
+    return translations[sys] ? sys : 'en';
+  }
+
+  function applyLang(lang){
+    var dict = translations[lang] || translations.en;
+    root.setAttribute('lang', lang);
+    document.title = dict.title;
+    if (metaDesc) metaDesc.setAttribute('content', dict.metaDescription);
+    document.querySelectorAll('[data-i18n]').forEach(function(el){
+      var key = el.getAttribute('data-i18n');
+      if (dict[key] != null) el.textContent = dict[key];
+    });
+    if (heroShot) heroShot.setAttribute('alt', dict.hero_shot_alt);
+    if (themeToggle) themeToggle.setAttribute('aria-label', dict.theme_toggle_label);
+    if (select) {
+      select.setAttribute('aria-label', dict.lang_select_label);
+      select.value = lang;
+    }
+  }
+
+  applyLang(detectLang());
+
+  if (select) {
+    select.addEventListener('change', function(){
+      var lang = select.value;
+      try { localStorage.setItem('mike-lang', lang); } catch(e){}
+      applyLang(lang);
+    });
   }
 })();
 </script>
