@@ -41,18 +41,18 @@ echo "==> Packaging $DMG"
 rm -f "$DMG"
 cp -R "$APP" "$STAGE/"
 
-# Icon y positions sit above the background's band; --window-size matches the
-# background's pixel size. See make_dmg_background.py for why the lower part
-# of that image is bleed.
+# Icon y positions keep the 160pt icons and their labels above the painted
+# horizon; --window-size matches the background's pixel size. See
+# make_dmg_background.py for why the lower part of that image is bleed.
 create-dmg \
   --volname "MIKE $VERSION" \
   --background "$ROOT/scripts/dmg_background.png" \
   --window-pos 200 120 \
   --window-size 660 430 \
-  --icon-size 110 \
-  --icon "MIKE.app" 175 215 \
+  --icon-size 160 \
+  --icon "MIKE.app" 175 165 \
   --hide-extension "MIKE.app" \
-  --app-drop-link 485 215 \
+  --app-drop-link 485 165 \
   --no-internet-enable \
   "$DMG" "$STAGE" >/dev/null
 
