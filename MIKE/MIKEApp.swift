@@ -53,9 +53,12 @@ struct MIKEApp: App {
     var body: some Scene {
         Window("MIKE", id: "main") {
             RootView()
-                .frame(minWidth: 720, minHeight: 460)
+                .frame(minWidth: 900, minHeight: 560)
         }
-        .defaultSize(width: 880, height: 600)
+        // Room for the widest section (Quick Edit) even when the sidebar grows
+        // beyond its ideal width — larger sidebar icons or longer translated
+        // labels both do that.
+        .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 AboutCommand()

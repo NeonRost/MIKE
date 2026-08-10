@@ -228,7 +228,11 @@ struct QuickEditView: View {
     private var canClear: Bool { session.sourceFile != nil }
 
     var body: some View {
-        // Wider than the other sections on purpose: the canvas needs room.
+        // The canvas wants room, but a hard minimum wider than the window can
+        // offer only pushes the content out of its frame — a wider sidebar
+        // (larger icon size, longer translated labels) eats that margin. So the
+        // inspector gives way first and the minimum stays inside what the
+        // window guarantees.
         HStack(alignment: .top, spacing: 0) {
             canvasArea
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
@@ -240,9 +244,9 @@ struct QuickEditView: View {
                 controls
                     .padding(20)
             }
-            .frame(width: 320)
+            .frame(minWidth: 280, idealWidth: 320, maxWidth: 320)
         }
-        .frame(minWidth: 900, minHeight: 560)
+        .frame(minWidth: 720, minHeight: 560)
     }
 
     // MARK: - Canvas
