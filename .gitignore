@@ -14,6 +14,7 @@ playground.xcworkspace
 # Build artifacts
 MIKE.app/
 MIKE.zip
+MIKE-*.zip
 # Release disk images are attached to GitHub Releases, not committed
 *.dmg
 *.dSYM.zip
