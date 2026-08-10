@@ -80,19 +80,63 @@ final class MergeTextsSession: ObservableObject {
     }
 
     func save(extension ext: String, directory: OutputDirectory) {
-        let target = ImageConverter.uniqueURL(directory: directory.url, stem: "merged", extension: ext)
+        let target = ImageConverter.uniqueURL(directory: directory.url, stem: Self.outputStem, extension: ext)
         do {
             try FileManager.default.createDirectory(at: directory.url, withIntermediateDirectories: true)
             try output.write(to: target, atomically: true, encoding: .utf8)
-            status = String(
-                localized: "Saved: \(target.lastPathComponent)",
-                comment: "Placeholder is the written file name"
-            )
-            statusKind = .success
+            report(saved: target)
         } catch {
             status = error.localizedDescription
             statusKind = .failure
         }
+    }
+
+    /// PDF and EPUB go through their own writers rather than `save(extension:)`:
+    /// both are containers with a structure, not the text written out verbatim.
+    func savePDF(directory: OutputDirectory) {
+        do {
+            let target = try TextDocumentWriter.pdf(
+                text: output,
+                into: directory.url,
+                stem: Self.outputStem
+            )
+            report(saved: target)
+        } catch {
+            status = error.localizedDescription
+            statusKind = .failure
+        }
+    }
+
+    func saveEPUB(directory: OutputDirectory) {
+        do {
+            let target = try EPUBBuilder.build(
+                text: output,
+                into: directory.url,
+                stem: Self.outputStem,
+                title: bookTitle
+            )
+            report(saved: target)
+        } catch {
+            status = error.localizedDescription
+            statusKind = .failure
+        }
+    }
+
+    private static let outputStem = "merged"
+
+    /// The first source file names the book — the one name the user has
+    /// already attached to this set. The text itself is editable and may no
+    /// longer resemble any of the files, so the stem is the fallback.
+    private var bookTitle: String {
+        files.first?.deletingPathExtension().lastPathComponent ?? Self.outputStem
+    }
+
+    private func report(saved target: URL) {
+        status = String(
+            localized: "Saved: \(target.lastPathComponent)",
+            comment: "Placeholder is the written file name"
+        )
+        statusKind = .success
     }
 }
 
@@ -114,7 +158,7 @@ struct MergeTextsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeader(
                     title: "Merge Texts",
-                    subtitle: "Combines several text files into one, in the order you put them in."
+                    subtitle: "Combines several text files into one, in the order you put them in — saved as text, Markdown, PDF or EPUB."
                 )
 
                 fileSection
@@ -205,6 +249,10 @@ struct MergeTextsView: View {
                     Button("Save as TXT") { session.save(extension: "txt", directory: directory) }
                         .disabled(session.output.isEmpty)
                     Button("Save as Markdown") { session.save(extension: "md", directory: directory) }
+                        .disabled(session.output.isEmpty)
+                    Button("Save as PDF") { session.savePDF(directory: directory) }
+                        .disabled(session.output.isEmpty)
+                    Button("Save as EPUB") { session.saveEPUB(directory: directory) }
                         .disabled(session.output.isEmpty)
                 }
             }

@@ -1243,19 +1243,19 @@
         }
       }
     },
-    "Combines several text files into one, in the order you put them in.": {
+    "Combines several text files into one, in the order you put them in — saved as text, Markdown, PDF or EPUB.": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Führt mehrere Textdateien in einer Datei zusammen, in der Reihenfolge, in der du sie einsortierst."
+            "value": "Fügt mehrere Textdateien zu einer zusammen, in der Reihenfolge, in der du sie einsortierst — als Text, Markdown, PDF oder EPUB."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Combina varios archivos de texto en uno solo, en el orden en que los coloques."
+            "value": "Une varios archivos de texto en uno, en el orden en que los coloques: como texto, Markdown, PDF o EPUB."
           }
         }
       }
@@ -1273,6 +1273,42 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uniendo…"
+          }
+        }
+      }
+    },
+    "Single image": {
+      "comment": "Output format: one combined image file",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Bild"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una imagen"
+          }
+        }
+      }
+    },
+    "Combine into": {
+      "comment": "Label for the output format picker",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden zu"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unir en"
           }
         }
       }
@@ -1708,6 +1744,10 @@
           }
         }
       }
+    },
+    "EPUB": {
+      "extractionState": "manual",
+      "shouldTranslate": false
     },
     "Done": {
       "extractionState": "manual",
@@ -2444,6 +2484,24 @@
         }
       }
     },
+    "Finished: %@ — too tall for JPEG, saved as PNG": {
+      "comment": "Placeholder is the written file name",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fertig: %@ — zu hoch für JPEG, als PNG gesichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listo: %@: demasiado alta para JPEG, guardada como PNG"
+          }
+        }
+      }
+    },
     "Folder": {
       "extractionState": "manual",
       "localizations": {
@@ -2858,19 +2916,19 @@
         }
       }
     },
-    "Joins JPEGs and PNGs into a single image — stacked into a tall one or lined up into a wide one.": {
+    "Joins JPEGs and PNGs into a single image — stacked into a tall one or lined up into a wide one — or into a PDF or EPUB with one page per image.": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fügt JPEGs und PNGs zu einem Bild zusammen — gestapelt zu einem hohen oder aneinandergereiht zu einem langen."
+            "value": "Fügt JPEGs und PNGs zu einem einzigen Bild zusammen — hochkant gestapelt oder breit nebeneinander — oder zu einem PDF oder EPUB mit einer Seite je Bild."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Une JPEG y PNG en una sola imagen: apilados en una alta o alineados en una ancha."
+            "value": "Une JPEG y PNG en una sola imagen: apilada en vertical o alineada en horizontal, o en un PDF o EPUB con una página por imagen."
           }
         }
       }
@@ -4427,6 +4485,40 @@
         }
       }
     },
+    "Save as EPUB": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Als EPUB sichern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardar como EPUB"
+          }
+        }
+      }
+    },
+    "Save as PDF": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Als PDF sichern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardar como PDF"
+          }
+        }
+      }
+    },
     "Save to": {
       "extractionState": "manual",
       "localizations": {
@@ -4474,6 +4566,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Se guarda como %@"
+          }
+        }
+      }
+    },
+    "PDF": {
+      "extractionState": "manual",
+      "shouldTranslate": false
+    },
+    "Saved as %@ — one page per image, no size limit": {
+      "comment": "Placeholder is the written file name",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird als %@ gesichert — eine Seite pro Bild, ohne Größengrenze"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se guarda como %@: una página por imagen, sin límite de tamaño"
+          }
+        }
+      }
+    },
+    "Saved as %@ — one page per image, images kept as they are": {
+      "comment": "Placeholder is the written file name",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird als %@ gesichert — eine Seite pro Bild, Bilder bleiben unverändert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se guarda como %@: una página por imagen, las imágenes se conservan tal cual"
           }
         }
       }
@@ -5127,6 +5259,58 @@
           "stringUnit": {
             "state": "translated",
             "value": "No se pudo escribir la imagen unida."
+          }
+        }
+      }
+    },
+    "There is no text to save.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es gibt keinen Text zum Sichern."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay texto que guardar."
+          }
+        }
+      }
+    },
+    "The document could not be written.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Dokument konnte nicht geschrieben werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo escribir el documento."
+          }
+        }
+      }
+    },
+    "The combined image would be %lld × %lld pixels — too large to create. Combine fewer images at a time.": {
+      "comment": "Placeholders are the pixel width and height of the result",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das verbundene Bild wäre %lld × %lld Pixel groß — zu groß zum Erzeugen. Verbinde weniger Bilder auf einmal."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La imagen unida tendría %lld × %lld píxeles: demasiado grande para crearla. Une menos imágenes a la vez."
           }
         }
       }

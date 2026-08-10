@@ -63,13 +63,23 @@ final class CombineImagesSession: ObservableObject {
         statusKind = .idle
     }
 
-    func combine(direction: StackDirection, handling: SizeHandling, directory: OutputDirectory) {
+    func combine(
+        output: CombineOutput,
+        direction: StackDirection,
+        handling: SizeHandling,
+        directory: OutputDirectory
+    ) {
         guard canCombine else { return }
 
         let target = directory.url
         let files = source == .folder
             ? (folder.map { ImageStacker.candidates(in: $0) } ?? [])
             : pickedFiles
+        // An EPUB carries a title. The folder the images came from is the one
+        // name the user has already given this set; the output stem is the
+        // fallback when they came from scattered files.
+        let title = (source == .folder ? folder : pickedFiles.first?.deletingLastPathComponent())?
+            .lastPathComponent ?? ImageStacker.outputStem
 
         isRunning = true
         statusKind = .working
@@ -79,15 +89,25 @@ final class CombineImagesSession: ObservableObject {
             let result = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
-                        let output = try ImageStacker.stack(
-                            files: files,
-                            into: target,
-                            direction: direction,
-                            handling: handling
-                        )
-                        continuation.resume(returning: Result<URL, Error>.success(output))
+                        let produced: ImageStacker.Output
+                        switch output {
+                        case .pdf:
+                            produced = try ImageStacker.pdf(files: files, into: target)
+                        case .epub:
+                            let url = try EPUBBuilder.build(files: files, into: target, title: title)
+                            produced = ImageStacker.Output(url: url, usedPNGFallback: false)
+                        case .image:
+                            produced = try ImageStacker.stack(
+                                files: files,
+                                into: target,
+                                direction: direction,
+                                handling: handling
+                            )
+                        }
+                        let output = produced
+                        continuation.resume(returning: Result<ImageStacker.Output, Error>.success(output))
                     } catch {
-                        continuation.resume(returning: Result<URL, Error>.failure(error))
+                        continuation.resume(returning: Result<ImageStacker.Output, Error>.failure(error))
                     }
                 }
             }
@@ -95,7 +115,17 @@ final class CombineImagesSession: ObservableObject {
             isRunning = false
             switch result {
             case .success(let output):
-                status = String(localized: "Finished: \(output.lastPathComponent)", comment: "Placeholder is the written file name")
+                // Silently handing back a .png where the label promised .jpg
+                // would look like a bug, so the reason comes with the result.
+                status = output.usedPNGFallback
+                    ? String(
+                        localized: "Finished: \(output.url.lastPathComponent) — too tall for JPEG, saved as PNG",
+                        comment: "Placeholder is the written file name"
+                      )
+                    : String(
+                        localized: "Finished: \(output.url.lastPathComponent)",
+                        comment: "Placeholder is the written file name"
+                      )
                 statusKind = .success
                 if let folder { fileCount = ImageStacker.candidates(in: folder).count }
             case .failure(let error):
@@ -113,6 +143,11 @@ struct CombineImagesView: View {
     // Remembered like the output folder, so a chosen layout survives restarts.
     @AppStorage("CombineImagesDirection") private var directionRaw = StackDirection.vertical.rawValue
     @AppStorage("CombineImagesSizeHandling") private var handlingRaw = SizeHandling.whiteStart.rawValue
+    @AppStorage("CombineImagesOutput") private var outputRaw = CombineOutput.image.rawValue
+
+    private var output: CombineOutput {
+        CombineOutput(rawValue: outputRaw) ?? .image
+    }
 
     private var direction: StackDirection {
         StackDirection(rawValue: directionRaw) ?? .vertical
@@ -134,7 +169,7 @@ struct CombineImagesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeader(
                     title: "Combine Images",
-                    subtitle: "Joins JPEGs and PNGs into a single image — stacked into a tall one or lined up into a wide one."
+                    subtitle: "Joins JPEGs and PNGs into a single image — stacked into a tall one or lined up into a wide one — or into a PDF or EPUB with one page per image."
                 )
 
                 Picker("Source", selection: $session.source) {
@@ -171,7 +206,14 @@ struct CombineImagesView: View {
                 OutputDirectoryRow(directory: directory, isEnabled: !session.isRunning)
 
                 HStack(spacing: 12) {
-                    Button("Combine") { session.combine(direction: direction, handling: handling, directory: directory) }
+                    Button("Combine") {
+                        session.combine(
+                            output: output,
+                            direction: direction,
+                            handling: handling,
+                            directory: directory
+                        )
+                    }
                         .buttonStyle(.borderedProminent)
                         .disabled(!session.canCombine)
                     Button("Clear") { session.clear() }
@@ -188,30 +230,54 @@ struct CombineImagesView: View {
     private var layoutOptions: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Text("Direction")
-                Picker("Direction", selection: $directionRaw) {
-                    ForEach(StackDirection.allCases) { Text($0.title).tag($0.rawValue) }
+                Text("Combine into")
+                Picker("Combine into", selection: $outputRaw) {
+                    ForEach(CombineOutput.allCases) { Text($0.title).tag($0.rawValue) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
             }
 
-            HStack(spacing: 10) {
-                Text("If sizes differ")
-                // Five wordy options: a menu reads better than a segmented row.
-                Picker("If sizes differ", selection: $handlingRaw) {
-                    ForEach(SizeHandling.allCases) { Text($0.title).tag($0.rawValue) }
+            // Layout has nothing to say about a PDF: every image is its own
+            // page at its own size, so the two pickers are hidden rather than
+            // shown having no effect.
+            if output.isStacked {
+                HStack(spacing: 10) {
+                    Text("Direction")
+                    Picker("Direction", selection: $directionRaw) {
+                        ForEach(StackDirection.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
                 }
-                .labelsHidden()
-                .fixedSize()
+
+                HStack(spacing: 10) {
+                    Text("If sizes differ")
+                    // Five wordy options: a menu reads better than a segmented row.
+                    Picker("If sizes differ", selection: $handlingRaw) {
+                        ForEach(SizeHandling.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
             }
 
             // The choice decides the file type, so it is spelled out rather
             // than left as a surprise.
-            Text("Saved as \(ImageStacker.outputName(for: handling))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Group {
+                switch output {
+                case .pdf:
+                    Text("Saved as \(ImageStacker.pdfOutputName) — one page per image, no size limit")
+                case .epub:
+                    Text("Saved as \(EPUBBuilder.outputName) — one page per image, images kept as they are")
+                case .image:
+                    Text("Saved as \(ImageStacker.outputName(for: handling))")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .disabled(session.isRunning)
     }

@@ -23,6 +23,7 @@ enum ImageStackerError: LocalizedError {
     case noImages
     case cannotRender
     case cannotWrite
+    case tooLarge(width: Int, height: Int)
 
     var errorDescription: String? {
         switch self {
@@ -32,8 +33,39 @@ enum ImageStackerError: LocalizedError {
             return String(localized: "The combined image could not be rendered.")
         case .cannotWrite:
             return String(localized: "The combined image could not be written.")
+        case .tooLarge(let width, let height):
+            return String(
+                localized: "The combined image would be \(width) × \(height) pixels — too large to create. Combine fewer images at a time.",
+                comment: "Placeholders are the pixel width and height of the result"
+            )
         }
     }
+}
+
+/// What the images are combined into.
+///
+/// A single image is the original behaviour; a PDF sidesteps the pixel limits
+/// entirely — each image becomes its own page, so neither JPEG's 65,535 px nor
+/// the memory a very tall canvas needs comes into it. Direction and size
+/// handling have no meaning there: pages are not stacked, they follow one
+/// another, and each keeps its own size.
+enum CombineOutput: String, CaseIterable, Identifiable {
+    case image
+    case pdf
+    case epub
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .image: return "Single image"
+        case .pdf: return "PDF"
+        case .epub: return "EPUB"
+        }
+    }
+
+    /// Whether direction and size handling have anything to say about it.
+    var isStacked: Bool { self == .image }
 }
 
 /// Which way the images are laid out.
@@ -92,6 +124,20 @@ enum ImageStacker {
     static let outputStem = "combined"
     static let acceptedExtensions: Set<String> = ["jpg", "jpeg", "png"]
 
+    /// JPEG stores its dimensions in two bytes, so neither side can exceed
+    /// this. Stacking is exactly the operation that runs into it: 182 images
+    /// of 800 px make a 145,600 px column, and the encoder then refuses to
+    /// finalize — which used to surface as a bare "could not be written".
+    /// PNG has no comparable limit, so the result is written as PNG instead.
+    static let jpegMaxDimension = 65_535
+
+    /// What `stack` produced, and whether the JPEG limit forced PNG on it —
+    /// the caller says so rather than letting the extension change silently.
+    struct Output {
+        let url: URL
+        let usedPNGFallback: Bool
+    }
+
     static func outputExtension(for handling: SizeHandling) -> String {
         handling.isTransparent ? "png" : "jpg"
     }
@@ -99,6 +145,8 @@ enum ImageStacker {
     static func outputName(for handling: SizeHandling) -> String {
         "\(outputStem).\(outputExtension(for: handling))"
     }
+
+    static var pdfOutputName: String { "\(outputStem).pdf" }
 
     /// Matches the output and every collision-avoiding variant of it, in both
     /// possible extensions, so a second run never picks up what a first run
@@ -138,7 +186,7 @@ enum ImageStacker {
         folder: URL,
         direction: StackDirection = .vertical,
         handling: SizeHandling = .whiteStart
-    ) throws -> URL {
+    ) throws -> Output {
         try stack(
             files: candidates(in: folder),
             into: folder,
@@ -153,7 +201,7 @@ enum ImageStacker {
         into directory: URL,
         direction: StackDirection = .vertical,
         handling: SizeHandling = .whiteStart
-    ) throws -> URL {
+    ) throws -> Output {
         guard !files.isEmpty else { throw ImageStackerError.noImages }
 
         let images = files.compactMap { try? ImageConverter.load(from: $0) }
@@ -165,8 +213,15 @@ enum ImageStacker {
             throw ImageStackerError.cannotRender
         }
 
+        // Decided before anything is rendered: too tall (or too wide) a result
+        // is one JPEG cannot hold, and finding that out only at the encoder
+        // would waste the whole render first.
+        let exceedsJPEG = canvas.width > jpegMaxDimension || canvas.height > jpegMaxDimension
+        let writesPNG = handling.isTransparent || exceedsJPEG
+
         // A transparent result needs a real alpha channel; the opaque one is
-        // cheaper and is what JPEG wants anyway.
+        // cheaper and is what JPEG wants anyway. The fallback keeps the white
+        // fill it would have had — only the container changes.
         let bitmapInfo = handling.isTransparent
             ? CGImageAlphaInfo.premultipliedLast.rawValue
             : CGImageAlphaInfo.noneSkipLast.rawValue
@@ -179,7 +234,11 @@ enum ImageStacker {
             bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: bitmapInfo
-        ) else { throw ImageStackerError.cannotRender }
+        ) else {
+            // The one failure here with a cause worth naming: the canvas is
+            // larger than Core Graphics will allocate.
+            throw ImageStackerError.tooLarge(width: canvas.width, height: canvas.height)
+        }
 
         // A fresh context is already clear, so only the white variant paints.
         if !handling.isTransparent {
@@ -218,10 +277,10 @@ enum ImageStacker {
         let target = ImageConverter.uniqueURL(
             directory: directory,
             stem: outputStem,
-            extension: outputExtension(for: handling)
+            extension: writesPNG ? "png" : "jpg"
         )
 
-        let type = handling.isTransparent ? "public.png" : "public.jpeg"
+        let type = writesPNG ? "public.png" : "public.jpeg"
         guard let destination = CGImageDestinationCreateWithURL(
             target as CFURL, type as CFString, 1, nil
         ) else { throw ImageStackerError.cannotWrite }
@@ -236,7 +295,50 @@ enum ImageStacker {
             throw ImageStackerError.cannotWrite
         }
 
-        return target
+        return Output(url: target, usedPNGFallback: exceedsJPEG && !handling.isTransparent)
+    }
+
+    // MARK: - PDF
+
+    /// One page per image, in the given order, at each image's own pixel size.
+    ///
+    /// Deliberately not a stack: the images are loaded and drawn one at a time
+    /// and never all held at once, which is what makes this the way out for
+    /// counts that no single image can hold.
+    static func pdf(files: [URL], into directory: URL) throws -> Output {
+        guard !files.isEmpty else { throw ImageStackerError.noImages }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = ImageConverter.uniqueURL(
+            directory: directory,
+            stem: outputStem,
+            extension: "pdf"
+        )
+
+        guard let context = CGContext(target as CFURL, mediaBox: nil, nil) else {
+            throw ImageStackerError.cannotWrite
+        }
+
+        // Unreadable files are skipped rather than failing the whole run, the
+        // way the single-image path already treats them.
+        var pages = 0
+        for file in files {
+            guard let image = try? ImageConverter.load(from: file) else { continue }
+            var box = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+            context.beginPage(mediaBox: &box)
+            context.draw(image, in: box)
+            context.endPage()
+            pages += 1
+        }
+        context.closePDF()
+
+        guard pages > 0 else {
+            // A PDF without pages is not a result worth leaving behind.
+            try? FileManager.default.removeItem(at: target)
+            throw ImageStackerError.noImages
+        }
+
+        return Output(url: target, usedPNGFallback: false)
     }
 
     // MARK: - Geometry
