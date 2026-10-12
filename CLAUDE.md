@@ -653,6 +653,13 @@ must not wrap or truncate.
 **Preserve those embeds unchanged** when editing the file, and keep new images
 in `images/`.
 
+The README layout matches TOM's and Sleeve's: a centered header (icon, tagline,
+badges, buttons, link row), a four-column table of advantages, a two-column
+grid with one cell per sidebar group, then the full tool list under "All
+tools". The grid images `images/MIKE_<Group>_dark.png` / `_light.png` are
+copies of the website shots in `docs/images/`, scaled to 1200 px wide and
+switched with `<picture>`; refresh them when those shots are retaken.
+
 ## Open items
 
 - **No standing-rules sections yet for the five Files-category tools**: Hash

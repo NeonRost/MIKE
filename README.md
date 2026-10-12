@@ -1,8 +1,142 @@
-# MIKE – Mike's Toolbox
+<h1 align="center">MIKE – Mike's Toolbox</h1>
 
-<img src="images/MIKE_Icon.png" width="200" alt="MIKE Icon">
+<p align="center">
+  <img src="images/MIKE_Icon.png" width="200" alt="MIKE Icon">
+</p>
 
-A small macOS toolbox for everyday media chores. Twenty tools, picked from the sidebar, plus a Setup section:
+<p align="center">
+  <b>Twenty tools for everyday media chores, in one small Mac app.</b><br>
+  Download videos, edit and convert images, extract text, manage files, split and tag audio,<br>
+  pack and unpack archives. Free, open source, no account, no tracking.
+</p>
+
+<p align="center">
+  <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-0a84ff?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-555555?style=flat-square">
+  <img alt="Swift and SwiftUI" src="https://img.shields.io/badge/Swift-SwiftUI-f05138?style=flat-square&logo=swift&logoColor=white">
+  <img alt="Languages: English, German, Spanish" src="https://img.shields.io/badge/EN%20%C2%B7%20DE%20%C2%B7%20ES-languages-2f7bf5?style=flat-square">
+  <img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-3a3a3a?style=flat-square">
+  <a href="../../releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/NeonRost/MIKE?style=flat-square&label=release&color=3f88cf"></a>
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><img alt="Download MIKE" src="https://img.shields.io/badge/Download-for%20macOS-1b5da6?style=for-the-badge&logo=apple&logoColor=white" height="40"></a>
+  <a href="https://x.com/NeonRostDEV"><img alt="Follow @NeonRostDEV on X" src="https://img.shields.io/badge/Follow-@NeonRostDEV-000000?style=for-the-badge&logo=x&logoColor=white" height="40"></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#all-tools">All tools</a> ·
+  <a href="#external-tools">External tools</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#languages">Languages</a> ·
+  <a href="#known-limitations">Known limitations</a> ·
+  <a href="#building">Building</a> ·
+  <a href="#support">Support</a> ·
+  <a href="https://neonrost.github.io/MIKE/">Website</a>
+</p>
+
+<p align="center">
+  <img src="images/MIKE_Screenshot.png" width="700" alt="MIKE Screenshot">
+</p>
+
+<table>
+  <tr>
+    <td width="25%" valign="top">
+      <h3>🧰 Twenty tools</h3>
+      Six groups in one sidebar. Every tool works on its own: no project files, no setup screens.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🔒 Stays on your Mac</h3>
+      No account, no tracking. Nothing is uploaded unless a tool's purpose is fetching a URL you gave it.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🛟 Never overwrites</h3>
+      A second run writes <code>combined (2).jpg</code>, and metadata edits keep the untouched original alongside.
+    </td>
+    <td width="25%" valign="top">
+      <h3>🔧 Tools stay current</h3>
+      yt-dlp, ffmpeg, cwebp and exiftool come from your package manager. Setup finds them and shows what is missing.
+    </td>
+  </tr>
+</table>
+
+<br>
+
+## Features
+
+Six groups, twenty tools, each picked straight from the sidebar. The screenshots are the real app.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Web_dark.png">
+        <img src="images/MIKE_Web_light.png" alt="The Download tool with a video URL entered and its quality options" width="100%">
+      </picture>
+      <br>
+      <sub>Download, with the quality options for this one URL.</sub>
+      <h3>🌐 Web</h3>
+      <b>Download</b> fetches a video with the right settings picked automatically by site, or just the audio. <b>Direct Link</b> turns a TikTok page into a direct link on the clipboard.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Text_dark.png">
+        <img src="images/MIKE_Text_light.png" alt="Extract Article showing the readable text pulled out of a web page" width="100%">
+      </picture>
+      <br>
+      <sub>Extract Article, with the readable text pulled out of a web page.</sub>
+      <h3>📝 Text</h3>
+      <b>Extract Article</b> pulls the readable text out of a web page, <b>Read Image Text</b> recognizes text in a photo or screenshot on your Mac, <b>Merge Texts</b> joins text files into TXT, Markdown, PDF or EPUB, and <b>Convert Encoding</b> moves a file between character encodings.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Images_dark.png">
+        <img src="images/MIKE_Images_light.png" alt="Quick Edit with its draggable crop frame over an image" width="100%">
+      </picture>
+      <br>
+      <sub>Quick Edit, with its draggable crop frame.</sub>
+      <h3>🖼️ Images</h3>
+      <b>Quick Edit</b> straightens, crops, converts and strips metadata in one pass. <b>Combine Images</b> joins images into one, a PDF or an EPUB, <b>Convert Format</b> works on single files or whole folders, and <b>Metadata</b> and <b>Embedded</b> show and edit EXIF, GPS and embedded data, AI generation fields included.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Video_dark.png">
+        <img src="images/MIKE_Video_light.png" alt="Trim Video with start and end markers and the optional crop frame switched on" width="100%">
+      </picture>
+      <br>
+      <sub>Trim Video, with start and end markers and the optional crop frame.</sub>
+      <h3>🎬 Video</h3>
+      <b>Trim Video</b> cuts a clip down on a draggable timeline, optionally cropping the frame (handy for black bars on a portrait recording). <b>Combine Videos</b> joins MP4s without re-encoding and names mismatched files up front.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Audio_dark.png">
+        <img src="images/MIKE_Audio_light.png" alt="Tag Editor showing a track's cover art and tag fields" width="100%">
+      </picture>
+      <br>
+      <sub>Tag Editor, with a track's cover art and tags.</sub>
+      <h3>🎵 Audio</h3>
+      <b>Tag Editor</b> reads and writes title, artist, album, cover art and the rest, losslessly. <b>Track Splitter</b> cuts one long recording into tracks at the silences between them, with a naming pattern for the whole list.
+    </td>
+    <td width="50%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="images/MIKE_Files_dark.png">
+        <img src="images/MIKE_Files_light.png" alt="Hash Check confirming a file matches its expected SHA-256" width="100%">
+      </picture>
+      <br>
+      <sub>Hash Check, confirming a file against its expected SHA-256.</sub>
+      <h3>🗂️ Files</h3>
+      <b>Hash Check</b> verifies MD5 to SHA-512, <b>Batch Rename</b> chains up to six rules with a live preview, <b>File Info</b> shows every detail and xattr, <b>Find Duplicates</b> finds byte-identical files, and <b>Compression</b> packs and unpacks ZIP and TAR.GZ.
+    </td>
+  </tr>
+</table>
+
+## All tools
 
 - **Download** – fetches a video with `yt-dlp` and picks the right settings by site: YouTube and unknown hosts are re-encoded to H.264/AAC so they play in QuickTime and iMessage, TikTok and Instagram are only rewrapped and keep their original quality. Live progress, and the download folder is remembered. An "Audio only" switch extracts just the audio track (MP3, M4A, AAC, OPUS, FLAC, WAV or OGG). By default both video and audio downloads take whatever quality yt-dlp considers best; unchecking "Best available quality" asks the source what it actually offers for that specific URL and lets you pick a genuine resolution or bitrate from the real list — MIKE never invents a number the source can't back up.
 - **Direct Link** – turns a TikTok page URL into a direct link to the video file, copied to the clipboard straight away. Needs no external tools.
@@ -28,7 +162,6 @@ A small macOS toolbox for everyday media chores. Twenty tools, picked from the s
 
 Output files are never overwritten: a second run writes `combined (2).jpg` rather than replacing the first.
 
-<img src="images/MIKE_Screenshot.png" width="700" alt="MIKE Screenshot">
 
 ## Requirements
 
@@ -52,7 +185,7 @@ Sections whose tools are missing are disabled up front and point at Setup — no
 
 ## Installation
 
-Grab the latest build from the [Releases](../../releases) page, unzip it and move `MIKE.app` to your Applications folder.
+Grab the latest build from the [Releases](../../releases) page — either the installer (`.dmg`: open it and drag MIKE onto the Applications folder) or the `.zip` (unzip it and move `MIKE.app` to your Applications folder).
 
 The app is not notarized, so macOS will refuse to open it on first launch. Go to **System Settings → Privacy & Security**, scroll down to the message about MIKE and click **Open Anyway**.
 
