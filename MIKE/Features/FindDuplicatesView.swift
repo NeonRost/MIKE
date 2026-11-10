@@ -95,19 +95,30 @@ final class FindDuplicatesSession: ObservableObject {
         isSearching = true
         groups = []
         phase = nil
-        status = ""
+        // Shown until the first real progress figure arrives: listing the
+        // folder comes first and has no total to count towards yet.
+        status = String(localized: "Listing files…")
         statusKind = .working
 
         searchTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let files = DuplicateFinder.collectFiles(in: inputFolders, includeSubfolders: recursive)
             do {
+                let files = try DuplicateFinder.collectFiles(
+                    in: inputFolders, includeSubfolders: recursive, isCancelled: { Task.isCancelled }
+                )
                 let result = try DuplicateFinder.findDuplicates(
                     files: files,
                     onScanProgress: { current, total in
-                        DispatchQueue.main.async { self?.phase = .scanning(current: current, total: total) }
+                        DispatchQueue.main.async {
+                            guard let self, self.isSearching else { return }
+                            self.status = ""
+                            self.phase = .scanning(current: current, total: total)
+                        }
                     },
                     onCompareProgress: { current, total in
-                        DispatchQueue.main.async { self?.phase = .comparing(current: current, total: total) }
+                        DispatchQueue.main.async {
+                            guard let self, self.isSearching else { return }
+                            self.phase = .comparing(current: current, total: total)
+                        }
                     },
                     isCancelled: { Task.isCancelled }
                 )
@@ -324,32 +335,8 @@ struct FindDuplicatesView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard !session.isSearching, !providers.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        // Collected on a lock, not `folders` directly: `loadItem`'s completion
-        // handlers arrive on an arbitrary queue, never the main actor.
-        let collected = FindDuplicatesDropCollector()
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                let url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else {
-                    url = item as? URL
-                }
-                guard let url else { return }
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue
-                else { return }
-                collected.append(url)
-            }
-        }
-
-        group.notify(queue: .main) {
-            for url in collected.value {
+        FileDrop.urls(from: providers) { urls in
+            for url in urls where FileDrop.isDirectory(url) {
                 session.addFolder(url)
             }
         }
@@ -414,8 +401,14 @@ struct FindDuplicatesView: View {
                     .buttonStyle(.link)
                     .font(.caption)
             }
-            ForEach($session.groups) { $group in
-                DuplicateGroupView(group: $group)
+            // Lazy: a large scan can produce thousands of groups, each a
+            // disclosure group with a segmented control per file. Building
+            // them all up front is what made the window stall once the result
+            // arrived.
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach($session.groups) { $group in
+                    DuplicateGroupView(group: $group)
+                }
             }
         }
     }
@@ -501,19 +494,5 @@ private struct DuplicateFileRow: View {
             .frame(width: 140)
             .disabled(isLastKeep)
         }
-    }
-}
-
-/// Minimal mutable box guarded by a lock, for collecting drop results that
-/// arrive on an arbitrary queue before handing them to the main actor.
-private final class FindDuplicatesDropCollector {
-    private var storage: [URL] = []
-    private let lock = NSLock()
-
-    var value: [URL] { lock.lock(); defer { lock.unlock() }; return storage }
-
-    func append(_ url: URL) {
-        lock.lock(); defer { lock.unlock() }
-        storage.append(url)
     }
 }

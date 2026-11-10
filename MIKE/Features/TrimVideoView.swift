@@ -87,8 +87,10 @@ final class TrimVideoSession: ObservableObject {
     @Published var isRunning = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
     /// Held so Cancel can stop the running ffmpeg.
     private var runningProcess: Process?
+    private var endObserver: NSObjectProtocol?
 
     /// The minimum clip length the spec calls for, and the minimum gap kept
     /// between the two markers so neither can be dragged or typed past the
@@ -126,6 +128,7 @@ final class TrimVideoSession: ObservableObject {
         cropRect = .zero
         status = ""
         statusKind = .idle
+        statusDetails = nil
         // Matches Combine Videos' folder mode: writes next to the source by
         // default, but stays redirectable.
         directory.set(url.deletingLastPathComponent())
@@ -134,10 +137,8 @@ final class TrimVideoSession: ObservableObject {
         // VideoTrimmer.duration's doc comment for why: AVFoundation cannot
         // even read a duration out of a format it cannot open, such as AVI.
         Task { [weak self] in
-            let value = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: VideoTrimmer.duration(of: url, ffmpeg: ffmpeg))
-                }
+            let value = await Background.run {
+                return VideoTrimmer.duration(of: url, ffmpeg: ffmpeg)
             }
             guard let self, sourceFile == url else { return }
             guard let value else {
@@ -202,21 +203,17 @@ final class TrimVideoSession: ObservableObject {
     /// orientation, so there is no separate transform to apply here, unlike
     /// the live-player path above.
     private func loadFallbackPreview(url: URL, ffmpeg: URL) async {
-        let extracted: (image: CGImage, size: CGSize)? = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                guard let frameURL = VideoTrimmer.extractPreviewFrame(from: url, ffmpeg: ffmpeg) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                defer { try? FileManager.default.removeItem(at: frameURL) }
-                guard let cgImage = try? ImageConverter.load(from: frameURL) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let size = CGSize(width: cgImage.width, height: cgImage.height)
-                let brightened = Self.brightenedForPreview(cgImage) ?? cgImage
-                continuation.resume(returning: (brightened, size))
+        let extracted: (image: CGImage, size: CGSize)? = await Background.run {
+            guard let frameURL = VideoTrimmer.extractPreviewFrame(from: url, ffmpeg: ffmpeg) else {
+                return nil
             }
+            defer { try? FileManager.default.removeItem(at: frameURL) }
+            guard let cgImage = try? ImageConverter.load(from: frameURL) else {
+                return nil
+            }
+            let size = CGSize(width: cgImage.width, height: cgImage.height)
+            let brightened = Self.brightenedForPreview(cgImage) ?? cgImage
+            return (brightened, size)
         }
         guard sourceFile == url, let extracted else { return }
         previewImage = NSImage(cgImage: extracted.image, size: extracted.size)
@@ -270,6 +267,7 @@ final class TrimVideoSession: ObservableObject {
         cropRect = .zero
         status = ""
         statusKind = .idle
+        statusDetails = nil
     }
 
     // MARK: - Playback
@@ -279,12 +277,12 @@ final class TrimVideoSession: ObservableObject {
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             self?.currentTime = time.seconds
         }
-        NotificationCenter.default.addObserver(
+        endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
         ) { [weak self] _ in
-            self?.isPlaying = false
+            MainActor.assumeIsolated { self?.isPlaying = false }
         }
     }
 
@@ -293,6 +291,12 @@ final class TrimVideoSession: ObservableObject {
             player.removeTimeObserver(timeObserverToken)
         }
         timeObserverToken = nil
+        // A block-based observer stays registered until it is removed by its
+        // token; without this every loaded video left one behind.
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+        }
+        endObserver = nil
         player?.pause()
         isPlaying = false
     }
@@ -330,9 +334,12 @@ final class TrimVideoSession: ObservableObject {
             startText = VideoTrimmer.formatTimecode(startTime)
             return
         }
-        startTime = min(max(parsed, 0), endTime - Self.minimumClipLength)
+        let previous = startTime
+        startTime = max(min(max(parsed, 0), endTime - Self.minimumClipLength), 0)
         startText = VideoTrimmer.formatTimecode(startTime)
-        seek(to: startTime)
+        // Also runs when the field merely loses focus, so only jump the
+        // playhead when there is somewhere new to jump to.
+        if startTime != previous { seek(to: startTime) }
     }
 
     func applyEndText() {
@@ -340,9 +347,29 @@ final class TrimVideoSession: ObservableObject {
             endText = VideoTrimmer.formatTimecode(endTime)
             return
         }
+        let previous = endTime
         endTime = max(min(parsed, duration), startTime + Self.minimumClipLength)
         endText = VideoTrimmer.formatTimecode(endTime)
-        seek(to: endTime)
+        if endTime != previous { seek(to: endTime) }
+    }
+
+    /// Takes over whatever is in the two fields right now, both at once.
+    ///
+    /// The fields only commit on Return or when they lose focus, and pressing
+    /// Trim does neither reliably — so a typed time could sit in the field
+    /// while the trim ran with the old one. Both are resolved together rather
+    /// than one after the other: clamping a new start against the *old* end
+    /// would pull it back whenever the whole range moved later.
+    func commitFields() {
+        guard duration > 0 else { return }
+        let parsedStart = VideoTrimmer.parseTimecode(startText) ?? startTime
+        let parsedEnd = VideoTrimmer.parseTimecode(endText) ?? endTime
+        let end = min(max(parsedEnd, Self.minimumClipLength), duration)
+        let start = min(max(parsedStart, 0), end - Self.minimumClipLength)
+        startTime = max(start, 0)
+        endTime = end
+        startText = VideoTrimmer.formatTimecode(startTime)
+        endText = VideoTrimmer.formatTimecode(endTime)
     }
 
     // MARK: - Trim
@@ -350,11 +377,13 @@ final class TrimVideoSession: ObservableObject {
     func cancel() {
         guard let process = runningProcess, process.isRunning else { return }
         status = String(localized: "Cancelling…")
-        process.terminate()
+        ProcessRunner.cancel(process)
     }
 
     func trim(ffmpeg: URL?, directory: OutputDirectory) {
+        commitFields()
         guard canTrim, let sourceFile, let ffmpeg else { return }
+        statusDetails = nil
 
         let start = startTime
         let end = endTime
@@ -366,33 +395,27 @@ final class TrimVideoSession: ObservableObject {
         status = String(localized: "Trimming…")
 
         Task { [weak self] in
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<URL, Error>, Never>) in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        let output = try VideoTrimmer.trim(
-                            input: sourceFile,
-                            start: start,
-                            end: end,
-                            cropRect: crop,
-                            into: target,
-                            ffmpeg: ffmpeg,
-                            onStart: { process in
-                                DispatchQueue.main.async { self?.runningProcess = process }
-                            }
-                        ) { progress in
-                            guard let progress else { return }
-                            DispatchQueue.main.async {
-                                self?.status = String(
-                                    localized: "Trimming… \(Int(progress * 100))%",
-                                    comment: "Percentage while trimming"
-                                )
-                            }
-                        }
-                        continuation.resume(returning: .success(output))
-                    } catch {
-                        continuation.resume(returning: .failure(error))
+            let result = await Background.attempt {
+                let output = try VideoTrimmer.trim(
+                    input: sourceFile,
+                    start: start,
+                    end: end,
+                    cropRect: crop,
+                    into: target,
+                    ffmpeg: ffmpeg,
+                    onStart: { process in
+                        DispatchQueue.main.async { self?.runningProcess = process }
+                    }
+                ) { progress in
+                    guard let progress else { return }
+                    DispatchQueue.main.async {
+                        self?.status = String(
+                            localized: "Trimming… \(Int(progress * 100))%",
+                            comment: "Percentage while trimming"
+                        )
                     }
                 }
+                return output
             }
 
             guard let self else { return }
@@ -409,6 +432,7 @@ final class TrimVideoSession: ObservableObject {
                 } ?? false
                 status = error.localizedDescription
                 statusKind = cancelled ? .idle : .failure
+                statusDetails = (error as? ToolLogCarrying)?.toolLog
             }
         }
     }
@@ -454,6 +478,12 @@ struct TrimVideoView: View {
                             onChoose: chooseFile,
                             onClear: { session.clear() }
                         )
+                        .acceptsFileDrop(isEnabled: !session.isRunning) { urls in
+                            guard let url = urls.first(where: {
+                                VideoTrimmer.acceptedExtensions.contains($0.pathExtension.lowercased())
+                            }) else { return }
+                            session.load(url, ffmpeg: ffmpeg, directory: directory)
+                        }
                         Spacer(minLength: 0)
                         Button("Clear") { session.clear() }
                             .disabled(!canClear)
@@ -484,11 +514,11 @@ struct TrimVideoView: View {
                             if session.isRunning {
                                 Button("Cancel") { session.cancel() }
                             }
-                            StatusLine(text: session.status, kind: session.statusKind)
+                            StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
                         }
                     }
                 }
-                .disabled(!isReady)
+                .disabled(!isReady && !session.isRunning)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -632,6 +662,7 @@ struct TrimVideoView: View {
                 .frame(width: 110)
                 .disabled(session.isRunning)
                 .onSubmit(apply)
+                .commitOnBlur(apply)
         }
     }
 
@@ -733,103 +764,5 @@ private struct TrimTimeline: View {
                     onSeek(endTime)
                 }
             }
-    }
-}
-
-// MARK: - Crop overlay
-
-/// The draggable crop frame, layered on top of `AVPlayerContainer`. Unlike
-/// Quick Edit's `CropCanvas` this draws no image of its own — the player
-/// behind it already renders the video — so it only needs the same
-/// letterbox math to line its frame and handles up with where
-/// `AVPlayerView`'s default `.resizeAspect` gravity actually draws the
-/// picture inside its bounds. `cropRect`/`displaySize` are both in the
-/// video's displayed (post-rotation) pixel space — see
-/// `TrimVideoSession.displaySize`'s doc comment.
-private struct CropOverlay: View {
-    let displaySize: CGSize
-    @Binding var cropRect: CGRect
-    let minCropSize: CGFloat
-    let isEnabled: Bool
-
-    @State private var dragStartRect: CGRect?
-
-    private let handleDiameter: CGFloat = 11
-
-    var body: some View {
-        GeometryReader { geo in
-            let scale = displayScale(for: geo.size)
-            let renderedSize = CGSize(width: displaySize.width * scale, height: displaySize.height * scale)
-            let origin = CGPoint(x: (geo.size.width - renderedSize.width) / 2, y: (geo.size.height - renderedSize.height) / 2)
-            let displayRect = CGRect(
-                x: origin.x + cropRect.origin.x * scale,
-                y: origin.y + cropRect.origin.y * scale,
-                width: cropRect.width * scale,
-                height: cropRect.height * scale
-            )
-
-            ZStack(alignment: .topLeading) {
-                // Even-odd fill: the outer rect minus the crop rect, dimmed —
-                // darkens everything outside the frame, leaves the inside
-                // clear, so the video keeps showing through unobstructed.
-                Path { path in
-                    path.addRect(CGRect(origin: .zero, size: geo.size))
-                    path.addRect(displayRect)
-                }
-                .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
-                .allowsHitTesting(false)
-
-                Rectangle()
-                    .strokeBorder(Color.white, lineWidth: 1.5)
-                    .frame(width: max(displayRect.width, 0), height: max(displayRect.height, 0))
-                    .position(x: displayRect.midX, y: displayRect.midY)
-                    .contentShape(Rectangle())
-                    .gesture(isEnabled ? moveGesture(scale: scale) : nil)
-
-                if isEnabled {
-                    ForEach(Array(CropHandle.allCases.enumerated()), id: \.offset) { _, handle in
-                        let position = CropGeometry.handlePosition(handle, in: displayRect)
-                        Circle()
-                            .fill(Color.white)
-                            .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
-                            .frame(width: handleDiameter, height: handleDiameter)
-                            .contentShape(Circle().inset(by: -8))
-                            .position(position)
-                            .gesture(dragGesture(for: handle, scale: scale))
-                    }
-                }
-            }
-            .clipped()
-        }
-    }
-
-    private func displayScale(for size: CGSize) -> CGFloat {
-        guard displaySize.width > 0, displaySize.height > 0, size.width > 0, size.height > 0 else { return 1 }
-        return min(size.width / displaySize.width, size.height / displaySize.height)
-    }
-
-    private func dragGesture(for handle: CropHandle, scale: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged { value in
-                if dragStartRect == nil { dragStartRect = cropRect }
-                guard let start = dragStartRect else { return }
-                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                cropRect = CropGeometry.applyHandleDrag(handle, delta: delta, start: start, bounds: displaySize, minSize: minCropSize)
-            }
-            .onEnded { _ in dragStartRect = nil }
-    }
-
-    private func moveGesture(scale: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
-            .onChanged { value in
-                if dragStartRect == nil { dragStartRect = cropRect }
-                guard let start = dragStartRect else { return }
-                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                var rect = start
-                rect.origin.x += delta.width
-                rect.origin.y += delta.height
-                cropRect = CropGeometry.clamp(rect, to: displaySize, minSize: minCropSize)
-            }
-            .onEnded { _ in dragStartRect = nil }
     }
 }

@@ -78,19 +78,15 @@ enum MetadataWriter {
 
     /// Strips every tag exiftool can write. `-all=` covers EXIF, IPTC, XMP and
     /// the rest in one go.
-    ///
-    /// - Parameter skipBackup: see `ExifToolWrite.run` — set by Quick Edit,
-    ///   which calls this on a file it just wrote itself, not the user's real
-    ///   original.
-    static func removeAll(from file: URL, exiftool: URL, skipBackup: Bool = false) throws -> ExifWriteOutcome {
-        try ExifToolWrite.run(assignments: ["-all="], on: file, exiftool: exiftool, skipBackup: skipBackup)
+    static func removeAll(from file: URL, exiftool: URL) throws -> ExifWriteOutcome {
+        try ExifToolWrite.run(assignments: ["-all="], on: file, exiftool: exiftool)
     }
 
     /// Removes location while leaving camera model, date and the rest in place.
     /// `-gps:all=` clears the EXIF GPS block; the XMP GPS tags are separate and
     /// go too, or a Lightroom/Photos export would keep its location.
-    static func removeGPS(from file: URL, exiftool: URL, skipBackup: Bool = false) throws -> ExifWriteOutcome {
-        try ExifToolWrite.run(assignments: ["-gps:all=", "-xmp:GPS*="], on: file, exiftool: exiftool, skipBackup: skipBackup)
+    static func removeGPS(from file: URL, exiftool: URL) throws -> ExifWriteOutcome {
+        try ExifToolWrite.run(assignments: ["-gps:all=", "-xmp:GPS*="], on: file, exiftool: exiftool)
     }
 
     /// The backup exiftool would create for `file`, exposed for the view's

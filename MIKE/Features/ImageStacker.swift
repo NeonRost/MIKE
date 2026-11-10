@@ -24,6 +24,7 @@ enum ImageStackerError: LocalizedError {
     case cannotRender
     case cannotWrite
     case tooLarge(width: Int, height: Int)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -33,6 +34,8 @@ enum ImageStackerError: LocalizedError {
             return String(localized: "The combined image could not be rendered.")
         case .cannotWrite:
             return String(localized: "The combined image could not be written.")
+        case .cancelled:
+            return String(localized: "Cancelled.")
         case .tooLarge(let width, let height):
             return String(
                 localized: "The combined image would be \(width) × \(height) pixels — too large to create. Combine fewer images at a time.",
@@ -136,6 +139,11 @@ enum ImageStacker {
     struct Output {
         let url: URL
         let usedPNGFallback: Bool
+        /// Names of the files that could not be read and are therefore
+        /// missing from the result. Reported, never swallowed: with a few
+        /// hundred scans, a "Finished" that hides a dropped page is how a
+        /// document ends up incomplete without anyone noticing.
+        var skipped: [String] = []
     }
 
     static func outputExtension(for handling: SizeHandling) -> String {
@@ -200,11 +208,21 @@ enum ImageStacker {
         files: [URL],
         into directory: URL,
         direction: StackDirection = .vertical,
-        handling: SizeHandling = .whiteStart
+        handling: SizeHandling = .whiteStart,
+        isCancelled: () -> Bool = { false }
     ) throws -> Output {
         guard !files.isEmpty else { throw ImageStackerError.noImages }
 
-        let images = files.compactMap { try? ImageConverter.load(from: $0) }
+        var images: [CGImage] = []
+        var skipped: [String] = []
+        for file in files {
+            if isCancelled() { throw ImageStackerError.cancelled }
+            if let image = try? ImageConverter.load(from: file) {
+                images.append(image)
+            } else {
+                skipped.append(file.lastPathComponent)
+            }
+        }
         guard !images.isEmpty else { throw ImageStackerError.noImages }
 
         let sizes = drawnSizes(for: images, direction: direction, handling: handling)
@@ -265,6 +283,7 @@ enum ImageStacker {
                 rect = CGRect(x: offset, y: y, width: size.width, height: size.height)
                 offset += size.width
             }
+            if isCancelled() { throw ImageStackerError.cancelled }
             context.draw(image, in: rect)
         }
 
@@ -295,7 +314,7 @@ enum ImageStacker {
             throw ImageStackerError.cannotWrite
         }
 
-        return Output(url: target, usedPNGFallback: exceedsJPEG && !handling.isTransparent)
+        return Output(url: target, usedPNGFallback: exceedsJPEG && !handling.isTransparent, skipped: skipped)
     }
 
     // MARK: - PDF
@@ -305,7 +324,7 @@ enum ImageStacker {
     /// Deliberately not a stack: the images are loaded and drawn one at a time
     /// and never all held at once, which is what makes this the way out for
     /// counts that no single image can hold.
-    static func pdf(files: [URL], into directory: URL) throws -> Output {
+    static func pdf(files: [URL], into directory: URL, isCancelled: () -> Bool = { false }) throws -> Output {
         guard !files.isEmpty else { throw ImageStackerError.noImages }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -320,10 +339,20 @@ enum ImageStacker {
         }
 
         // Unreadable files are skipped rather than failing the whole run, the
-        // way the single-image path already treats them.
+        // way the single-image path already treats them — and named in the
+        // result, so a missing page does not go unnoticed.
         var pages = 0
+        var skipped: [String] = []
         for file in files {
-            guard let image = try? ImageConverter.load(from: file) else { continue }
+            if isCancelled() {
+                context.closePDF()
+                try? FileManager.default.removeItem(at: target)
+                throw ImageStackerError.cancelled
+            }
+            guard let image = try? ImageConverter.load(from: file) else {
+                skipped.append(file.lastPathComponent)
+                continue
+            }
             var box = CGRect(x: 0, y: 0, width: image.width, height: image.height)
             context.beginPage(mediaBox: &box)
             context.draw(image, in: box)
@@ -338,7 +367,7 @@ enum ImageStacker {
             throw ImageStackerError.noImages
         }
 
-        return Output(url: target, usedPNGFallback: false)
+        return Output(url: target, usedPNGFallback: false, skipped: skipped)
     }
 
     // MARK: - Geometry

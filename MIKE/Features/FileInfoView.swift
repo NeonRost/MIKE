@@ -176,23 +176,13 @@ struct FileInfoView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isLoading, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
-            DispatchQueue.main.async {
-                if isDirectory.boolValue {
-                    session.rejectFolder()
-                } else {
-                    session.load(url)
-                }
+        guard !session.isLoading, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first else { return }
+            if FileDrop.isDirectory(url) {
+                session.rejectFolder()
+            } else if FileDrop.isFile(url) {
+                session.load(url)
             }
         }
         return true

@@ -58,6 +58,31 @@ struct RequirementBanner: View {
     }
 }
 
+/// Runs `commit` when a text field stops being edited.
+///
+/// `onSubmit` only fires on Return. A value typed into a field and left there
+/// — by clicking a button, or just clicking elsewhere — would otherwise stay
+/// on screen without ever being applied, which reads exactly as if it had
+/// been.
+private struct CommitOnBlur: ViewModifier {
+    @FocusState private var isFocused: Bool
+    let commit: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .focused($isFocused)
+            .onChange(of: isFocused) { focused in
+                if !focused { commit() }
+            }
+    }
+}
+
+extension View {
+    func commitOnBlur(_ commit: @escaping () -> Void) -> some View {
+        modifier(CommitOnBlur(commit: commit))
+    }
+}
+
 /// Header used by every section, so they all read the same way.
 struct SectionHeader: View {
     let title: LocalizedStringKey
@@ -89,6 +114,12 @@ struct StatusLine: View {
 
     let text: String
     let kind: Kind
+    /// What the external tool actually printed, for a failure whose one-line
+    /// summary does not say enough. The status line shows the single most
+    /// telling line; this is the rest of it, a click away rather than lost.
+    var details: String? = nil
+
+    @State private var showingDetails = false
 
     var body: some View {
         if !text.isEmpty {
@@ -102,6 +133,23 @@ struct StatusLine: View {
                     .foregroundStyle(colour)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if kind == .failure, let details, !details.isEmpty {
+                    Button("Details") { showingDetails = true }
+                        .buttonStyle(.link)
+                        .font(.callout)
+                        .popover(isPresented: $showingDetails, arrowEdge: .bottom) {
+                            ScrollView {
+                                // The tool's own output: never translated, and
+                                // never a catalog key.
+                                Text(verbatim: details)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(12)
+                            }
+                            .frame(width: 560, height: 280)
+                        }
+                }
             }
         }
     }

@@ -23,10 +23,6 @@ enum BackupState {
     /// A `_original` was already there from an earlier run; it was kept and no
     /// new backup was written over it.
     case preserved
-    /// No backup was made, by design — `skipBackup` was set because the file
-    /// being edited is not itself an original worth preserving (Quick Edit's
-    /// freshly written save target).
-    case skipped
 }
 
 /// What an exiftool write did. Failure is thrown, not returned.
@@ -37,18 +33,24 @@ enum ExifWriteOutcome {
     case nothingToDo
 }
 
-enum ExifWriteError: LocalizedError {
+enum ExifWriteError: LocalizedError, ToolLogCarrying {
     case launchFailed
-    /// exiftool's own error text, passed through untranslated.
-    case toolFailed(String)
+    /// exiftool's own error text, passed through untranslated, with the rest
+    /// of what it printed kept for the Details popover.
+    case toolFailed(String, log: String)
 
     var errorDescription: String? {
         switch self {
         case .launchFailed:
             return String(localized: "exiftool could not be started.")
-        case .toolFailed(let detail):
+        case .toolFailed(let detail, _):
             return detail
         }
+    }
+
+    var toolLog: String? {
+        if case .toolFailed(_, let log) = self, !log.isEmpty { return log }
+        return nil
     }
 }
 
@@ -77,19 +79,11 @@ enum ExifToolWrite {
     ///     because exiftool requires `-config` before any other option. Used
     ///     by the Embedded section to register arbitrary PNG text keywords as
     ///     writable tags.
-    ///   - skipBackup: forces `-overwrite_original` even when no `_original`
-    ///     exists yet. For a file MIKE itself just wrote a moment ago (Quick
-    ///     Edit's save target) there is nothing worth backing up — the real,
-    ///     untouched source lives elsewhere and was never touched — so a
-    ///     `_original` sidecar next to the user's chosen save location would
-    ///     only be clutter. Metadata and Embedded never pass this: they edit
-    ///     the user's real file in place and always want the backup.
     static func run(
         configFile: URL? = nil,
         assignments: [String],
         on file: URL,
-        exiftool: URL,
-        skipBackup: Bool = false
+        exiftool: URL
     ) throws -> ExifWriteOutcome {
         // Decide up front whether a backup already exists. If it does we must
         // not let exiftool overwrite it — that file is the real original from
@@ -104,7 +98,7 @@ enum ExifToolWrite {
             arguments.append(configFile.path)
         }
         arguments.append(contentsOf: assignments)
-        if backupExisted || skipBackup {
+        if backupExisted {
             arguments.append("-overwrite_original")
         }
         // Everything after `--` is a file name, so a field value that happens
@@ -115,20 +109,16 @@ enum ExifToolWrite {
         arguments.append("--")
         arguments.append(file.path)
 
-        var lines: [String] = []
-        let status = ProcessRunner.stream(executable: exiftool, arguments: arguments) { line in
-            lines.append(line)
+        let outcome = ProcessRunner.run(executable: exiftool, arguments: arguments, logLimit: 200)
+        if outcome.launchFailed { throw ExifWriteError.launchFailed }
+        guard outcome.status == 0 else {
+            throw ExifWriteError.toolFailed(
+                outcome.failureSummary(tool: "exiftool"), log: outcome.logText
+            )
         }
 
-        let output = lines.joined(separator: "\n")
-        let updated = updatedCount(in: output)
-
-        guard status == 0 else {
-            throw ExifWriteError.toolFailed(errorDetail(from: lines, status: status))
-        }
-        if let updated, updated > 0 {
-            let backup: BackupState = backupExisted ? .preserved : (skipBackup ? .skipped : .created)
-            return .updated(backup)
+        if let updated = updatedCount(in: outcome.logText), updated > 0 {
+            return .updated(backupExisted ? .preserved : .created)
         }
         // Exit 0 but nothing changed: exiftool says "0 image files updated"
         // (e.g. removing a tag that was not there).
@@ -145,19 +135,5 @@ enum ExifToolWrite {
             }
         }
         return nil
-    }
-
-    /// The most useful line to show when exiftool fails: its own Error/Warning
-    /// text if there is one, otherwise the last line, otherwise the exit code.
-    private static func errorDetail(from lines: [String], status: Int32) -> String {
-        if let problem = lines.last(where: {
-            $0.hasPrefix("Error") || $0.hasPrefix("Warning")
-        }) {
-            return String(problem.prefix(200))
-        }
-        if let last = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            return String(last.prefix(200))
-        }
-        return String(localized: "exiftool exited with code \(Int(status)).")
     }
 }

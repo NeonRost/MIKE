@@ -29,6 +29,10 @@ enum CompressionError: LocalizedError {
     case passwordProtected
     case cancelled
     case io(String)
+    /// TAR.GZ only. SWCompression works on whole `Data` values — the tar, its
+    /// gzipped form and every entry are each held in memory at once — so a
+    /// large enough input is refused up front rather than left to exhaust it.
+    case tooLargeForTarGz(limit: String)
 
     var errorDescription: String? {
         switch self {
@@ -45,6 +49,11 @@ enum CompressionError: LocalizedError {
             return String(localized: "Cancelled.")
         case .io(let detail):
             return detail
+        case .tooLargeForTarGz(let limit):
+            return String(
+                localized: "This is too large for TAR.GZ here — the limit is \(limit), because the whole archive has to fit in memory. ZIP has no such limit.",
+                comment: "Placeholder is a size such as 2 GB"
+            )
         }
     }
 }

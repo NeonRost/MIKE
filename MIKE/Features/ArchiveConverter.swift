@@ -46,11 +46,13 @@ enum ArchiveConverter {
 
         if isCancelled() { throw CompressionError.cancelled }
 
-        let topLevelItems = (try? FileManager.default.contentsOfDirectory(
+        // Hidden entries included: converting must not lose what the source
+        // archive held.
+        let topLevelItems = ((try? FileManager.default.contentsOfDirectory(
             at: tempDir,
             includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []
+            options: []
+        )) ?? []).filter { $0.lastPathComponent != ".DS_Store" }
 
         try ArchiveBuilder.create(
             format: targetFormat,

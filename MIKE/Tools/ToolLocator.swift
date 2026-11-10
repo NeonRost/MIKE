@@ -93,6 +93,12 @@ struct ToolStatus: Sendable {
     /// stock ffmpeg is built without libwebp, so having ffmpeg at all is not
     /// enough to promise WebP export.
     var supportsWebP: Bool = false
+    /// Nothing ran, but at least one candidate did not *fail* either — it
+    /// just did not answer in time. That is what a busy machine looks like
+    /// (an ffmpeg encode running flat out, say), not what a missing tool
+    /// looks like, and the registry keeps the last good answer instead of
+    /// believing this one.
+    var inconclusive: Bool = false
 
     var isAvailable: Bool { url != nil }
 
@@ -112,12 +118,13 @@ enum ToolLocator {
 
     static func locate(_ tool: Tool, customPath: String?) -> ToolStatus {
         var customFailed = false
+        var timedOut = false
 
         if let customPath, !customPath.trimmingCharacters(in: .whitespaces).isEmpty {
             let expanded = (customPath.trimmingCharacters(in: .whitespaces) as NSString)
                 .expandingTildeInPath
             let url = URL(fileURLWithPath: expanded)
-            if let version = probe(tool, at: url) {
+            if let version = probe(tool, at: url, timedOut: &timedOut) {
                 return ToolStatus(
                     url: url,
                     version: version,
@@ -130,7 +137,7 @@ enum ToolLocator {
 
         for directory in standardDirectories {
             let url = URL(fileURLWithPath: directory).appendingPathComponent(tool.executableName)
-            if let version = probe(tool, at: url) {
+            if let version = probe(tool, at: url, timedOut: &timedOut) {
                 return ToolStatus(
                     url: url,
                     version: version,
@@ -141,7 +148,11 @@ enum ToolLocator {
             }
         }
 
-        return ToolStatus(url: nil, version: nil, origin: .missing, customPathFailed: customFailed)
+        return ToolStatus(
+            url: nil, version: nil, origin: .missing,
+            customPathFailed: customFailed && !timedOut,
+            inconclusive: timedOut
+        )
     }
 
     /// Homebrew's own two install locations: Apple Silicon first, then the
@@ -210,7 +221,7 @@ enum ToolLocator {
             executable: url,
             arguments: ["-hide_banner", "-encoders"],
             timeout: 8
-        ), result.status == 0 else {
+        ), result.status == 0, !result.timedOut else {
             // A failed probe is not remembered: the next check should try again.
             return false
         }
@@ -223,17 +234,26 @@ enum ToolLocator {
     /// A binary only counts once it actually runs. The executable bit alone is
     /// not enough: quarantined downloads and architecture mismatches pass that
     /// check and then fail the moment they are used for real.
-    private static func probe(_ tool: Tool, at url: URL) -> String? {
+    private static func probe(_ tool: Tool, at url: URL, timedOut: inout Bool) -> String? {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue,
               FileManager.default.isExecutableFile(atPath: url.path)
         else { return nil }
 
+        // Ten seconds, not five: a standalone yt-dlp unpacks itself on first
+        // launch, and any of these can be slow to start while the machine is
+        // busy encoding.
         guard let result = ProcessRunner.capture(
             executable: url,
-            arguments: [tool.versionArgument]
-        ), result.status == 0 else { return nil }
+            arguments: [tool.versionArgument],
+            timeout: 10
+        ) else { return nil }
+        if result.timedOut {
+            timedOut = true
+            return nil
+        }
+        guard result.status == 0 else { return nil }
 
         return parseVersion(tool, from: result.output)
     }

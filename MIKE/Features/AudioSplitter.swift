@@ -34,13 +34,21 @@ struct TrackRange: Identifiable {
     var end: Double
 }
 
-enum AudioSplitError: LocalizedError {
-    case ffmpegFailed(String)
+enum AudioSplitError: LocalizedError, ToolLogCarrying {
+    case ffmpegFailed(String, log: String)
+    case notAnalyzable
 
     var errorDescription: String? {
         switch self {
-        case .ffmpegFailed(let detail): return "ffmpeg: \(detail)"
+        case .ffmpegFailed(let detail, _): return "ffmpeg: \(detail)"
+        case .notAnalyzable:
+            return String(localized: "The file could not be analyzed.")
         }
+    }
+
+    var toolLog: String? {
+        if case .ffmpegFailed(_, let log) = self, !log.isEmpty { return log }
+        return nil
     }
 }
 
@@ -59,27 +67,59 @@ enum AudioSplitter {
 
     /// Runs `-af silencedetect` and reports the file's duration and every
     /// detected silence. Must be called off the main thread.
+    ///
+    /// Streamed rather than captured under a timeout: the whole file is
+    /// decoded, so how long this takes depends on the file and the machine,
+    /// and no fixed limit separates "long recording" from "hung". The user
+    /// gets a progress figure and a Cancel button instead.
+    ///
+    /// - Throws: `CancellationError` when cancelled through `onStart`'s process.
     static func analyze(
         file: URL,
         thresholdDB: Double,
         minDuration: Double,
-        ffmpeg: URL
-    ) -> SilenceAnalysis? {
-        guard let result = ProcessRunner.capture(
+        ffmpeg: URL,
+        onStart: ((Process) -> Void)? = nil,
+        onProgress: @escaping (Double) -> Void = { _ in }
+    ) throws -> SilenceAnalysis {
+        var duration: Double?
+        var relevant: [String] = []
+        var lastPercent = -1
+
+        let outcome = ProcessRunner.run(
             executable: ffmpeg,
             arguments: [
                 "-i", file.path,
                 "-af", "silencedetect=noise=\(thresholdDB)dB:d=\(minDuration)",
                 "-f", "null", "-",
             ],
-            // Generous: silencedetect decodes far faster than real time in
-            // practice, but a long album-side rip on a slow machine should
-            // never be mistaken for a hang.
-            timeout: 300
-        ) else { return nil }
+            onStart: onStart
+        ) { line in
+            if duration == nil, let parsed = parseDuration(line) {
+                duration = parsed
+            }
+            if line.contains("silence_start:") || line.contains("silence_end:") {
+                relevant.append(line)
+            }
+            if let duration, duration > 0,
+               let range = line.range(of: "time=[0-9:.]+", options: .regularExpression),
+               let time = VideoTrimmer.parseTimecode(String(line[range].dropFirst(5))) {
+                let percent = Int(min(time / duration, 1) * 100)
+                if percent != lastPercent {
+                    lastPercent = percent
+                    onProgress(Double(percent) / 100)
+                }
+            }
+        }
 
-        guard let duration = parseDuration(result.output) else { return nil }
-        return SilenceAnalysis(duration: duration, silences: parseSilences(result.output))
+        if outcome.cancelled { throw CancellationError() }
+        guard outcome.succeeded else {
+            throw AudioSplitError.ffmpegFailed(
+                outcome.failureSummary(tool: "ffmpeg"), log: outcome.logText
+            )
+        }
+        guard let duration else { throw AudioSplitError.notAnalyzable }
+        return SilenceAnalysis(duration: duration, silences: parseSilences(relevant.joined(separator: "\n")))
     }
 
     /// `Duration: 00:00:14.00, ...` from the `-i` banner.
@@ -157,9 +197,7 @@ enum AudioSplitter {
         ffmpeg: URL,
         onStart: ((Process) -> Void)? = nil
     ) throws {
-        var lastLines: [String] = []
-        var launched: Process?
-        let status = ProcessRunner.stream(
+        let outcome = ProcessRunner.run(
             executable: ffmpeg,
             arguments: [
                 "-y",
@@ -169,24 +207,18 @@ enum AudioSplitter {
                 "-c", "copy",
                 destination.path,
             ],
-            onStart: { process in
-                launched = process
-                onStart?(process)
-            }
-        ) { line in
-            lastLines.append(line)
-            if lastLines.count > 20 { lastLines.removeFirst() }
-        }
+            onStart: onStart
+        )
 
-        guard status == 0 else {
-            if launched?.terminationReason == .uncaughtSignal {
-                // ffmpeg writes as it goes; a killed cut leaves a half-built
-                // file that has to go, unlike the tracks finished earlier.
-                try? FileManager.default.removeItem(at: destination)
-                throw CancellationError()
-            }
-            let detail = lastLines.last.map { String($0.prefix(140)) } ?? "exit \(status)"
-            throw AudioSplitError.ffmpegFailed(detail)
+        guard outcome.succeeded else {
+            // ffmpeg writes as it goes; a stopped or failed cut leaves a
+            // half-built file that has to go, unlike the tracks finished
+            // earlier.
+            try? FileManager.default.removeItem(at: destination)
+            if outcome.cancelled { throw CancellationError() }
+            throw AudioSplitError.ffmpegFailed(
+                outcome.failureSummary(tool: "ffmpeg"), log: outcome.logText
+            )
         }
     }
 

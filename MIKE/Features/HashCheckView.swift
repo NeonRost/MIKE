@@ -259,19 +259,10 @@ struct HashCheckView: View {
     // MARK: - Drag & drop
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isCalculating, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue
-            else { return }
-            DispatchQueue.main.async { session.load(url) }
+        guard !session.isCalculating, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first(where: FileDrop.isFile) else { return }
+            session.load(url)
         }
         return true
     }

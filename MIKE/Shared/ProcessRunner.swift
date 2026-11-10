@@ -14,11 +14,66 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 import Foundation
 
 struct ProcessResult {
     let status: Int32
     let output: String
+    /// The watchdog had to stop it. Distinct from a launch failure (`nil`):
+    /// a binary that runs but is slow under load is not a missing binary.
+    var timedOut = false
+    /// Stopped through `ProcessRunner.cancel(_:)` or at app termination.
+    var cancelled = false
+}
+
+/// What a streamed run came to.
+struct ProcessOutcome {
+    let status: Int32
+    /// The last lines the tool printed, newest last — enough to show the user
+    /// what actually went wrong, not just a one-line guess at it.
+    let log: [String]
+    /// MIKE asked the process to stop. This is recorded when the request is
+    /// made rather than read back from the exit status afterwards: ffmpeg
+    /// catches SIGTERM, finishes its file and exits 255 like any other
+    /// failure, so "died by signal" never becomes true for it.
+    let cancelled: Bool
+    /// The binary could not be started at all.
+    let launchFailed: Bool
+
+    var succeeded: Bool { status == 0 && !cancelled && !launchFailed }
+
+    /// The one line most worth showing: the tool's own error line if it
+    /// printed one, otherwise its last line, otherwise the exit code.
+    func failureSummary(tool: String, limit: Int = 300) -> String {
+        if launchFailed {
+            return String(
+                localized: "\(tool) could not be started.",
+                comment: "Placeholder is a tool name such as ffmpeg"
+            )
+        }
+        if let explicit = log.last(where: {
+            let lowered = $0.lowercased()
+            return lowered.hasPrefix("error") || $0.contains("ERROR:") || lowered.hasPrefix("warning")
+        }) {
+            return String(explicit.prefix(limit))
+        }
+        if let last = log.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            return String(last.prefix(limit))
+        }
+        return String(
+            localized: "\(tool) exited with code \(Int(status)).",
+            comment: "First placeholder is a tool name such as ffmpeg"
+        )
+    }
+
+    /// Everything kept from the run, for the Details popover.
+    var logText: String { log.joined(separator: "\n") }
+}
+
+/// An error that can hand over the tool's own output alongside its summary.
+protocol ToolLogCarrying {
+    var toolLog: String? { get }
 }
 
 /// Thin wrapper around `Process`. Every call blocks, so callers must be on a
@@ -27,17 +82,19 @@ enum ProcessRunner {
 
     /// Runs a short-lived command and collects its whole output.
     ///
-    /// Returns `nil` when the binary cannot be launched or does not finish
-    /// within `timeout` — that is how a quarantined or architecture-mismatched
-    /// executable shows up, and it must not hang the tool check.
+    /// Returns `nil` when the binary cannot be launched. A run the watchdog had
+    /// to stop comes back with `timedOut` set — that is how a quarantined or
+    /// hanging executable shows up, and it must not hang the tool check.
     static func capture(
         executable: URL,
         arguments: [String],
+        environment: [String: String]? = nil,
         timeout: TimeInterval = 5
     ) -> ProcessResult? {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
+        if let environment { process.environment = environment }
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -49,6 +106,9 @@ enum ProcessRunner {
         } catch {
             return nil
         }
+        // Registered like a streamed run, so quitting MIKE mid-probe does not
+        // leave it behind either.
+        running.add(process)
 
         let timedOut = Atomic(false)
         let watchdog = DispatchWorkItem {
@@ -62,11 +122,13 @@ enum ProcessRunner {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         watchdog.cancel()
+        running.remove(process)
 
-        if timedOut.value { return nil }
         return ProcessResult(
             status: process.terminationStatus,
-            output: String(decoding: data, as: UTF8.self)
+            output: String(decoding: data, as: UTF8.self),
+            timedOut: timedOut.value,
+            cancelled: cancelRequests.consume(process)
         )
     }
 
@@ -75,21 +137,23 @@ enum ProcessRunner {
     /// Lines are split on both `\n` and `\r`: yt-dlp redraws its progress with
     /// carriage returns, so splitting on newlines alone would deliver the whole
     /// download as a single line at the very end.
-    /// - Parameter onStart: handed the live `Process` so the caller can call
-    ///   `terminate()` on it. Runs on the calling thread, before any output
-    ///   arrives.
-    @discardableResult
-    static func stream(
+    /// - Parameters:
+    ///   - logLimit: how many trailing lines are kept for `ProcessOutcome.log`.
+    ///   - onStart: handed the live `Process` so the caller can pass it to
+    ///     `cancel(_:)`. Runs on the calling thread, before any output arrives.
+    ///   - onLine: every line as it arrives, for callers that parse progress.
+    static func run(
         executable: URL,
         arguments: [String],
         environment: [String: String]? = nil,
+        logLimit: Int = 60,
         onStart: ((Process) -> Void)? = nil,
-        onLine: @escaping (String) -> Void
-    ) -> Int32 {
+        onLine: ((String) -> Void)? = nil
+    ) -> ProcessOutcome {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        process.environment = environment
+        if let environment { process.environment = environment }
         process.standardInput = FileHandle.nullDevice
 
         let pipe = Pipe()
@@ -97,6 +161,17 @@ enum ProcessRunner {
         process.standardError = pipe
 
         let buffer = Locked<[UInt8]>([])
+        var log: [String] = []
+
+        // Called with the buffer lock held, so `log` needs no lock of its own.
+        let deliver: ([UInt8]) -> Void = { bytes in
+            guard !bytes.isEmpty else { return }
+            let line = String(decoding: bytes, as: UTF8.self)
+            guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            log.append(line)
+            if log.count > logLimit { log.removeFirst(log.count - logLimit) }
+            onLine?(line)
+        }
 
         let emitLines: (Data, Bool) -> Void = { chunk, flush in
             buffer.withValue { bytes in
@@ -104,10 +179,10 @@ enum ProcessRunner {
                 while let index = bytes.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
                     let lineBytes = Array(bytes[bytes.startIndex..<index])
                     bytes.removeSubrange(bytes.startIndex...index)
-                    deliver(lineBytes, to: onLine)
+                    deliver(lineBytes)
                 }
                 if flush, !bytes.isEmpty {
-                    deliver(Array(bytes), to: onLine)
+                    deliver(Array(bytes))
                     bytes.removeAll()
                 }
             }
@@ -123,7 +198,7 @@ enum ProcessRunner {
             try process.run()
         } catch {
             pipe.fileHandleForReading.readabilityHandler = nil
-            return -1
+            return ProcessOutcome(status: -1, log: [], cancelled: false, launchFailed: true)
         }
 
         // Registered so quitting MIKE does not leave a yt-dlp behind.
@@ -138,7 +213,44 @@ enum ProcessRunner {
         let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
         emitLines(remainder, true)
 
-        return process.terminationStatus
+        var collected: [String] = []
+        buffer.withValue { _ in collected = log }
+        return ProcessOutcome(
+            status: process.terminationStatus,
+            log: collected,
+            cancelled: cancelRequests.consume(process),
+            launchFailed: false
+        )
+    }
+
+    // MARK: - Cancelling
+
+    /// Asks a running process to stop and remembers that MIKE did the asking.
+    /// Every Cancel button goes through here rather than calling
+    /// `terminate()` itself — see `ProcessOutcome.cancelled` for why the
+    /// request has to be recorded.
+    static func cancel(_ process: Process) {
+        guard process.isRunning else { return }
+        cancelRequests.mark(process)
+        process.terminate()
+    }
+
+    private static let cancelRequests = CancelRequests()
+
+    /// Keyed by object identity and always consumed by the run it belongs to,
+    /// so a later `Process` reusing the same address never inherits the flag.
+    private final class CancelRequests {
+        private var requested = Set<ObjectIdentifier>()
+        private let lock = NSLock()
+
+        func mark(_ process: Process) {
+            lock.lock(); requested.insert(ObjectIdentifier(process)); lock.unlock()
+        }
+
+        func consume(_ process: Process) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            return requested.remove(ObjectIdentifier(process)) != nil
+        }
     }
 
     // MARK: - Shutdown
@@ -173,16 +285,9 @@ enum ProcessRunner {
             processes.removeAll()
             lock.unlock()
             for process in snapshot where process.isRunning {
-                process.terminate()
+                ProcessRunner.cancel(process)
             }
         }
-    }
-
-    private static func deliver(_ bytes: [UInt8], to onLine: (String) -> Void) {
-        guard !bytes.isEmpty else { return }
-        let line = String(decoding: bytes, as: UTF8.self)
-        guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        onLine(line)
     }
 }
 

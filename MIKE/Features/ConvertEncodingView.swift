@@ -32,13 +32,20 @@ final class ConvertEncodingSession: ObservableObject {
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
 
-    var unrepresentableCount: Int {
-        guard let decodedText else { return 0 }
-        return EncodingConverter.unrepresentableCharacterCount(decodedText, in: targetEncoding)
-    }
+    /// How many characters of the decoded text the target encoding cannot
+    /// hold. Stored, not computed: it used to be worked out on every access —
+    /// one encode attempt per character, several times per redraw — which
+    /// froze the window on any file of real size.
+    @Published private(set) var unrepresentableCount = 0
+    @Published private(set) var decodedCharacterCount = 0
+    @Published private(set) var isWorking = false
+
+    /// Counts background passes, so the answer for a file or an encoding the
+    /// user has since moved away from is dropped.
+    private var generation = 0
 
     var canSave: Bool {
-        decodedText != nil && unrepresentableCount == 0
+        decodedText != nil && unrepresentableCount == 0 && !isWorking
     }
 
     func chooseFile(directory: OutputDirectory) {
@@ -48,39 +55,96 @@ final class ConvertEncodingSession: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        load(chosen, directory: directory)
+    }
 
+    func load(_ chosen: URL, directory: OutputDirectory) {
         sourceFile = chosen
         directory.set(chosen.deletingLastPathComponent())
         status = ""
         statusKind = .idle
-
-        let detected = EncodingConverter.detectEncoding(of: chosen)
-        detectedEncoding = detected
-        sourceEncoding = detected
+        detectedEncoding = nil
+        decodedText = nil
+        decodeError = nil
+        unrepresentableCount = 0
+        decodedCharacterCount = 0
         targetEncoding = .utf8
-        redecode()
+
+        generation += 1
+        let current = generation
+        isWorking = true
+        Task {
+            let detected = await Background.run {
+                return EncodingConverter.detectEncoding(of: chosen)
+            }
+            guard current == generation else { return }
+            detectedEncoding = detected
+            // Assigning the picker's value triggers `redecode()` through the
+            // view only when it actually changes, so it is called here too.
+            sourceEncoding = detected
+            redecode()
+        }
+    }
+
+    func redecode() {
+        guard let sourceFile else { return }
+        let source = sourceEncoding
+        let target = targetEncoding
+        generation += 1
+        let current = generation
+        isWorking = true
+
+        Task {
+            let result: (text: String?, error: String?, count: Int, unrepresentable: Int) =
+                await Background.run {
+                    do {
+                        let text = try EncodingConverter.decode(sourceFile, as: source)
+                        let unrepresentable = EncodingConverter.unrepresentableCharacterCount(text, in: target)
+                        return (text, nil, text.count, unrepresentable)
+                    } catch {
+                        return (nil, error.localizedDescription, 0, 0)
+                    }
+                }
+            guard current == generation else { return }
+            decodedText = result.text
+            decodeError = result.error
+            decodedCharacterCount = result.count
+            unrepresentableCount = result.unrepresentable
+            isWorking = false
+        }
+    }
+
+    /// The target encoding changed: same text, new question.
+    func recount() {
+        guard let text = decodedText else { return }
+        let target = targetEncoding
+        generation += 1
+        let current = generation
+        isWorking = true
+
+        Task {
+            let unrepresentable = await Background.run {
+                EncodingConverter.unrepresentableCharacterCount(text, in: target)
+            }
+            guard current == generation else { return }
+            unrepresentableCount = unrepresentable
+            isWorking = false
+        }
     }
 
     func clear() {
+        generation += 1
+        isWorking = false
         sourceFile = nil
         detectedEncoding = nil
         sourceEncoding = .utf8
         targetEncoding = .utf8
         decodedText = nil
         decodeError = nil
+        unrepresentableCount = 0
+        decodedCharacterCount = 0
         status = ""
         statusKind = .idle
-    }
-
-    func redecode() {
-        guard let sourceFile else { return }
-        do {
-            decodedText = try EncodingConverter.decode(sourceFile, as: sourceEncoding)
-            decodeError = nil
-        } catch {
-            decodedText = nil
-            decodeError = error.localizedDescription
-        }
     }
 
     func save(directory: OutputDirectory) {
@@ -153,6 +217,9 @@ struct ConvertEncodingView: View {
                     onChoose: { session.chooseFile(directory: directory) },
                     onClear: { session.clear() }
                 )
+                .acceptsFileDrop { urls in
+                    if let url = urls.first(where: FileDrop.isFile) { session.load(url, directory: directory) }
+                }
 
                 if session.sourceFile != nil {
                     detectionNote
@@ -203,6 +270,7 @@ struct ConvertEncodingView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 encodingPicker(selection: $session.targetEncoding)
+                    .onChange(of: session.targetEncoding) { _ in session.recount() }
             }
         }
     }
@@ -231,7 +299,9 @@ struct ConvertEncodingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let decodeError = session.decodeError {
+            if session.isWorking, session.decodedText == nil, session.decodeError == nil {
+                ProgressView().controlSize(.small)
+            } else if let decodeError = session.decodeError {
                 Text(decodeError)
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -244,8 +314,8 @@ struct ConvertEncodingView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(8)
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                if decodedText.count > Self.previewLength {
-                    Text("Showing the first \(Self.previewLength) of \(decodedText.count) characters.")
+                if session.decodedCharacterCount > Self.previewLength {
+                    Text("Showing the first \(Self.previewLength) of \(session.decodedCharacterCount) characters.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

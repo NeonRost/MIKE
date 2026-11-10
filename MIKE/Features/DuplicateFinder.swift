@@ -38,11 +38,26 @@ enum DuplicateFinder {
     /// One walk per chosen folder; hidden entries, non-regular files,
     /// symlinks and Finder aliases are all skipped, and a file reachable
     /// through more than one chosen folder is only counted once.
-    static func collectFiles(in folders: [URL], includeSubfolders: Bool) -> [URL] {
+    ///
+    /// Packages are never entered. A Photos library, an app bundle or an
+    /// Xcode project is a folder that the Finder shows as one item because
+    /// its contents belong together; the files inside are not the user's to
+    /// tidy one by one. Verified before this was added: a scan of a folder
+    /// holding a `.photoslibrary` listed the library's own `originals` next
+    /// to an ordinary copy and offered one of the two for the Trash.
+    ///
+    /// - Throws: `DuplicateFinderError.cancelled`. Walking a large tree takes
+    ///   long enough on its own that Cancel has to work here too, not only
+    ///   once the comparing has started.
+    static func collectFiles(
+        in folders: [URL],
+        includeSubfolders: Bool,
+        isCancelled: () -> Bool = { false }
+    ) throws -> [URL] {
         var result: [URL] = []
         var seen = Set<URL>()
         let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .isAliasFileKey]
-        var options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles]
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
         if !includeSubfolders {
             options.insert(.skipsSubdirectoryDescendants)
         }
@@ -55,6 +70,7 @@ enum DuplicateFinder {
             ) else { continue }
 
             for case let url as URL in enumerator {
+                if isCancelled() { throw DuplicateFinderError.cancelled }
                 guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
                 guard values.isRegularFile == true else { continue }
                 guard values.isSymbolicLink != true, values.isAliasFile != true else { continue }
@@ -89,6 +105,10 @@ enum DuplicateFinder {
             if isCancelled() { throw DuplicateFinderError.cancelled }
             reportProgress(current: index + 1, total: files.count, lastPercent: &lastScanPercent, onProgress: onScanProgress)
             guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { continue }
+            // Every empty file is byte-identical to every other, which makes
+            // them all "duplicates" — of placeholders that are usually there
+            // on purpose. There is no space to win and something to break.
+            guard size > 0 else { continue }
             bySize[Int64(size), default: []].append(url)
         }
         onScanProgress(files.count, files.count)

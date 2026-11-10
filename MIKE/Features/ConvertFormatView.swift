@@ -114,6 +114,7 @@ final class ConvertFormatSession: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
 
@@ -187,22 +188,16 @@ final class ConvertFormatSession: ObservableObject {
                     throw ImageConversionError.cannotRead
                 }
 
-                let output = try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            let result = try ImageConverter.convert(
-                                image: image,
-                                stem: stem,
-                                to: chosenFormat,
-                                in: target,
-                                webpEncoder: webpEncoder
-                            )
-                            continuation.resume(returning: result)
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
+                let output = try await Background.attempt {
+                    let result = try ImageConverter.convert(
+                        image: image,
+                        stem: stem,
+                        to: chosenFormat,
+                        in: target,
+                        webpEncoder: webpEncoder
+                    )
+                    return result
+                }.get()
 
                 status = String(localized: "Finished: \(output.lastPathComponent)", comment: "Placeholder is the written file name")
                 statusKind = .success
@@ -283,24 +278,18 @@ final class ConvertFormatSession: ObservableObject {
                     comment: "Progress while converting a batch of images"
                 )
 
-                let outcome: Result<URL, Error> = await withCheckedContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            let image = try ImageConverter.load(from: file)
-                            let stem = file.deletingPathExtension().lastPathComponent
-                            let output = try ImageConverter.convert(
-                                image: image,
-                                stem: stem,
-                                to: targetFormatSnapshot,
-                                in: target,
-                                webpEncoder: webpEncoder,
-                                quality: quality
-                            )
-                            continuation.resume(returning: .success(output))
-                        } catch {
-                            continuation.resume(returning: .failure(error))
-                        }
-                    }
+                let outcome: Result<URL, Error> = await Background.attempt {
+                    let image = try ImageConverter.load(from: file)
+                    let stem = file.deletingPathExtension().lastPathComponent
+                    let output = try ImageConverter.convert(
+                        image: image,
+                        stem: stem,
+                        to: targetFormatSnapshot,
+                        in: target,
+                        webpEncoder: webpEncoder,
+                        quality: quality
+                    )
+                    return output
                 }
 
                 switch outcome {
@@ -546,20 +535,10 @@ struct ConvertFormatView: View {
     }
 
     private func handleFolderDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isBatchRunning, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else { return }
-            DispatchQueue.main.async { session.loadBatchFolder(url, directory: batchDirectory) }
+        guard !session.isBatchRunning, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let folder = urls.first(where: FileDrop.isDirectory) else { return }
+            session.loadBatchFolder(folder, directory: batchDirectory)
         }
         return true
     }

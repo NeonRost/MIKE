@@ -248,7 +248,9 @@ final class CompressionSession: ObservableObject {
 
         let items = packItems
         let format = packFormat
-        let name = packArchiveName.trimmingCharacters(in: .whitespaces)
+        // Typed by the user, so it is made safe as a file name first: a slash
+        // in it would otherwise be read as a folder that does not exist.
+        let name = FileName.sanitizedStem(packArchiveName, fallback: "Archive")
         let target = ImageConverter.uniqueURL(directory: directory.url, stem: name, extension: format.fileExtension)
 
         isPacking = true
@@ -709,33 +711,21 @@ struct CompressionView: View {
     // MARK: - Drag & drop
 
     private func handleSingleFileDrop(_ providers: [NSItemProvider], onLoad: @escaping (URL) -> Void) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            guard let url = fileURL(from: item) else { return }
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue
-            else { return }
-            DispatchQueue.main.async { onLoad(url) }
+        guard !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first(where: FileDrop.isFile) else { return }
+            onLoad(url)
         }
         return true
     }
 
     private func handleMultiFileDrop(_ providers: [NSItemProvider], onEach: @escaping (URL) -> Void) -> Bool {
         guard !providers.isEmpty else { return false }
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                guard let url = fileURL(from: item) else { return }
-                guard FileManager.default.fileExists(atPath: url.path) else { return }
-                DispatchQueue.main.async { onEach(url) }
+        FileDrop.urls(from: providers) { urls in
+            for url in urls where FileManager.default.fileExists(atPath: url.path) {
+                onEach(url)
             }
         }
         return true
-    }
-
-    private func fileURL(from item: NSSecureCoding?) -> URL? {
-        if let data = item as? Data {
-            return URL(dataRepresentation: data, relativeTo: nil)
-        }
-        return item as? URL
     }
 }

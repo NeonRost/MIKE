@@ -30,6 +30,13 @@ final class CombineImagesSession: ObservableObject {
     @Published var isRunning = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    private var cancelFlag: CancelFlag?
+
+    func cancel() {
+        guard isRunning else { return }
+        cancelFlag?.set()
+        status = String(localized: "Cancelling…")
+    }
 
     var canCombine: Bool {
         guard !isRunning else { return false }
@@ -53,7 +60,11 @@ final class CombineImagesSession: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the folder picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        loadFolder(chosen, directory: directory)
+    }
 
+    func loadFolder(_ chosen: URL, directory: OutputDirectory) {
+        guard !isRunning else { return }
         folder = chosen
         fileCount = ImageStacker.candidates(in: chosen).count
         // Folder mode keeps writing next to the sources, as it always has —
@@ -84,32 +95,31 @@ final class CombineImagesSession: ObservableObject {
         isRunning = true
         statusKind = .working
         status = String(localized: "Combining…")
+        let flag = CancelFlag()
+        cancelFlag = flag
 
         Task {
-            let result = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        let produced: ImageStacker.Output
-                        switch output {
-                        case .pdf:
-                            produced = try ImageStacker.pdf(files: files, into: target)
-                        case .epub:
-                            let url = try EPUBBuilder.build(files: files, into: target, title: title)
-                            produced = ImageStacker.Output(url: url, usedPNGFallback: false)
-                        case .image:
-                            produced = try ImageStacker.stack(
-                                files: files,
-                                into: target,
-                                direction: direction,
-                                handling: handling
-                            )
-                        }
-                        let output = produced
-                        continuation.resume(returning: Result<ImageStacker.Output, Error>.success(output))
-                    } catch {
-                        continuation.resume(returning: Result<ImageStacker.Output, Error>.failure(error))
-                    }
+            let result = await Background.attempt {
+                let produced: ImageStacker.Output
+                switch output {
+                case .pdf:
+                    produced = try ImageStacker.pdf(files: files, into: target, isCancelled: { flag.isSet })
+                case .epub:
+                    let book = try EPUBBuilder.build(
+                        files: files, into: target, title: title, isCancelled: { flag.isSet }
+                    )
+                    produced = ImageStacker.Output(url: book.url, usedPNGFallback: false, skipped: book.skipped)
+                case .image:
+                    produced = try ImageStacker.stack(
+                        files: files,
+                        into: target,
+                        direction: direction,
+                        handling: handling,
+                        isCancelled: { flag.isSet }
+                    )
                 }
+                let output = produced
+                return output
             }
 
             isRunning = false
@@ -117,7 +127,7 @@ final class CombineImagesSession: ObservableObject {
             case .success(let output):
                 // Silently handing back a .png where the label promised .jpg
                 // would look like a bug, so the reason comes with the result.
-                status = output.usedPNGFallback
+                var message = output.usedPNGFallback
                     ? String(
                         localized: "Finished: \(output.url.lastPathComponent) — too tall for JPEG, saved as PNG",
                         comment: "Placeholder is the written file name"
@@ -126,12 +136,29 @@ final class CombineImagesSession: ObservableObject {
                         localized: "Finished: \(output.url.lastPathComponent)",
                         comment: "Placeholder is the written file name"
                       )
+                // The same skip-and-name convention the other batch sections
+                // follow: the result exists, and what is missing from it is
+                // said out loud.
+                if !output.skipped.isEmpty {
+                    let list = ListFormatter.localizedString(byJoining: output.skipped)
+                    message += " " + String(
+                        localized: "Left out, could not be read: \(list)",
+                        comment: "Placeholder is a comma-separated list of file names"
+                    )
+                }
+                status = message
                 statusKind = .success
                 if let folder { fileCount = ImageStacker.candidates(in: folder).count }
             case .failure(let error):
                 status = error.localizedDescription
-                statusKind = .failure
+                // Stopping on purpose is not a failure, so it is not red.
+                if case ImageStackerError.cancelled = error {
+                    statusKind = .idle
+                } else {
+                    statusKind = .failure
+                }
             }
+            cancelFlag = nil
         }
     }
 }
@@ -191,6 +218,11 @@ struct CombineImagesView: View {
                         isEnabled: !session.isRunning,
                         onChoose: { session.chooseFolder(directory: directory) }
                     )
+                    .acceptsFileDrop(isEnabled: !session.isRunning) { urls in
+                        if let folder = urls.first(where: FileDrop.isDirectory) {
+                            session.loadFolder(folder, directory: directory)
+                        }
+                    }
                 } else {
                     FileListEditor(
                         files: $session.pickedFiles,
@@ -199,6 +231,13 @@ struct CombineImagesView: View {
                         addTitle: "Add Images…",
                         isEnabled: !session.isRunning
                     )
+                    .acceptsFileDrop(isEnabled: !session.isRunning) { urls in
+                        for url in urls
+                        where ImageStacker.acceptedExtensions.contains(url.pathExtension.lowercased())
+                            && !session.pickedFiles.contains(url) {
+                            session.pickedFiles.append(url)
+                        }
+                    }
                 }
 
                 layoutOptions
@@ -216,6 +255,9 @@ struct CombineImagesView: View {
                     }
                         .buttonStyle(.borderedProminent)
                         .disabled(!session.canCombine)
+                    if session.isRunning {
+                        Button("Cancel") { session.cancel() }
+                    }
                     Button("Clear") { session.clear() }
                         .disabled(!canClear)
                     StatusLine(text: session.status, kind: session.statusKind)

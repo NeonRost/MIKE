@@ -31,6 +31,7 @@
 		47C23A3CEC5AA6EFF5D4BC6B /* DirectLinkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F7ED35C8BF15C92759EA84 /* DirectLinkView.swift */; };
 		4C6676991205C08161E4197D /* ExtractArticleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B5A296D8A2DA44FC0F7CD9 /* ExtractArticleView.swift */; };
 		51BB515E190E8E2935EBA997 /* CombineImagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8ED50DC91129EC9B83BAB48 /* CombineImagesView.swift */; };
+		53CB4ECF2471C875B0F05EA0 /* FileDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 038D34958E0764A18B2E937C /* FileDrop.swift */; };
 		53DBF80CAA9E098993F788E3 /* Extraction.js in Resources */ = {isa = PBXBuildFile; fileRef = 1462D15A51CD1522B17A4928 /* Extraction.js */; };
 		54066402A06238CEFF9C0D6D /* EncodingCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84F6C46C380D9991E8F204AA /* EncodingCatalog.swift */; };
 		549C4E22860A49989B6F4E2C /* ConvertFormatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9DE9F16926737B08D4F7D67 /* ConvertFormatView.swift */; };
@@ -73,6 +74,7 @@
 		DCC1ACDF68FF411D246E43FA /* FolderRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C2A46C3588D425DC0EE799 /* FolderRow.swift */; };
 		E505835953DFC50621139573 /* MetadataWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3310C2CEC6C3D3DAC22F36B2 /* MetadataWriter.swift */; };
 		E73B088CDD832FC755FB07E2 /* ImageEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EEEB957F2A40C4F837A92E4 /* ImageEditor.swift */; };
+		EB01F4E88835D03FD87ABAEB /* Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6505554B088375F581642DED /* Background.swift */; };
 		EB1EBA3C18E6D221334C8E52 /* DownloadRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C4B8638A6DD3C74FD9F724 /* DownloadRunner.swift */; };
 		F15B5C489944E695477F09FC /* MetadataView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0754B66A5C98CC0D74A5F499 /* MetadataView.swift */; };
 		F1CCD582BCADB701A3609E13 /* ExifToolWrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = E230C246D967D938F3FA52B4 /* ExifToolWrite.swift */; };
@@ -87,6 +89,7 @@
 
 /* Begin PBXFileReference section */
 		027836B27569A77EA337B7CE /* FileInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileInfoView.swift; sourceTree = "<group>"; };
+		038D34958E0764A18B2E937C /* FileDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDrop.swift; sourceTree = "<group>"; };
 		0754B66A5C98CC0D74A5F499 /* MetadataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataView.swift; sourceTree = "<group>"; };
 		0BCAF5C0B5DD725359536689 /* CombineVideosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CombineVideosView.swift; sourceTree = "<group>"; };
 		0C1AFB16D040DA521A85D35F /* ImageStacker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStacker.swift; sourceTree = "<group>"; };
@@ -107,6 +110,7 @@
 		50FA889B7C11A86D321E48F2 /* TikTokResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TikTokResolver.swift; sourceTree = "<group>"; };
 		53E2611E3E538DBEBE4BFB94 /* ReadImageTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadImageTextView.swift; sourceTree = "<group>"; };
 		59459473821984F55C86D32A /* EmbeddedMetadataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedMetadataView.swift; sourceTree = "<group>"; };
+		6505554B088375F581642DED /* Background.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Background.swift; sourceTree = "<group>"; };
 		6843576DBD9AE3ED5CCE0BD2 /* FileInfoReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileInfoReader.swift; sourceTree = "<group>"; };
 		687C22DC328221A6F00ADA0F /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		6F7CA6E74331B1FF78CE3344 /* VideoTrimmer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoTrimmer.swift; sourceTree = "<group>"; };
@@ -275,8 +279,10 @@
 		C14627CD7735CDAF00CFC30D /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				6505554B088375F581642DED /* Background.swift */,
 				B98198BCF2132C08B5C2920D /* CropGeometry.swift */,
 				E230C246D967D938F3FA52B4 /* ExifToolWrite.swift */,
+				038D34958E0764A18B2E937C /* FileDrop.swift */,
 				B8BC915945C9128AC099E55B /* FileListEditor.swift */,
 				E882881E4693202AF211A265 /* FileRow.swift */,
 				70C2A46C3588D425DC0EE799 /* FolderRow.swift */,
@@ -394,6 +400,7 @@
 				7B835FF8388CFBFF1D5D6876 /* ArticleExtractor.swift in Sources */,
 				686AC32244CFF634645468E9 /* AudioSplitter.swift in Sources */,
 				AC7A030932C95AD84C6134C3 /* AudioTagEditor.swift in Sources */,
+				EB01F4E88835D03FD87ABAEB /* Background.swift in Sources */,
 				C75ED73CC835611E6BA5B87F /* BatchRenameView.swift in Sources */,
 				67CED3F56A0A468E9E393CCF /* BatchRenamer.swift in Sources */,
 				51BB515E190E8E2935EBA997 /* CombineImagesView.swift in Sources */,
@@ -416,6 +423,7 @@
 				FE2BEB72B117EBFD9669C755 /* EncodingConverter.swift in Sources */,
 				F1CCD582BCADB701A3609E13 /* ExifToolWrite.swift in Sources */,
 				4C6676991205C08161E4197D /* ExtractArticleView.swift in Sources */,
+				53CB4ECF2471C875B0F05EA0 /* FileDrop.swift in Sources */,
 				81633B78932DC3559DC39261 /* FileInfoReader.swift in Sources */,
 				BA0D2EFC79BB94C0765E68E9 /* FileInfoView.swift in Sources */,
 				96654B8B995CFFBD8B410751 /* FileListEditor.swift in Sources */,

@@ -56,7 +56,11 @@ enum EncodingConverter {
     /// `encoding` — per user-perceived character (grapheme cluster), so one
     /// emoji counts as one, not as however many Unicode scalars it is made of.
     static func unrepresentableCharacterCount(_ text: String, in encoding: String.Encoding) -> Int {
-        text.reduce(into: 0) { count, character in
+        // The common case, answered in one pass: if the whole text encodes,
+        // nothing in it is unrepresentable, and there is no reason to ask
+        // character by character.
+        if text.data(using: encoding, allowLossyConversion: false) != nil { return 0 }
+        return text.reduce(into: 0) { count, character in
             if String(character).data(using: encoding, allowLossyConversion: false) == nil {
                 count += 1
             }

@@ -30,8 +30,12 @@ final class CombineVideosSession: ObservableObject {
     @Published var problems: [(file: String, reasons: [String])] = []
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
     /// Held so Cancel can stop the running ffmpeg.
     private var runningProcess: Process?
+    /// Counts inspections, so an answer for a list that has since changed is
+    /// dropped instead of overwriting the answer for the current one.
+    private var inspectionGeneration = 0
 
     var hasInput: Bool {
         source == .folder ? folder != nil : !pickedFiles.isEmpty
@@ -48,15 +52,17 @@ final class CombineVideosSession: ObservableObject {
         fileCount = 0
         pickedFiles = []
         isInspecting = false
+        inspectionGeneration += 1
         problems = []
         status = ""
         statusKind = .idle
+        statusDetails = nil
     }
 
     func cancel() {
         guard let process = runningProcess, process.isRunning else { return }
         status = String(localized: "Cancelling…")
-        process.terminate()
+        ProcessRunner.cancel(process)
     }
 
     func chooseFolder(directory: OutputDirectory, ffmpeg: URL?) {
@@ -66,7 +72,11 @@ final class CombineVideosSession: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the folder picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        loadFolder(chosen, directory: directory, ffmpeg: ffmpeg)
+    }
 
+    func loadFolder(_ chosen: URL, directory: OutputDirectory, ffmpeg: URL?) {
+        guard !isRunning else { return }
         folder = chosen
         fileCount = VideoConcatenator.candidates(in: chosen).count
         // Folder mode keeps writing next to the sources, as it always has —
@@ -81,6 +91,9 @@ final class CombineVideosSession: ObservableObject {
     /// user commits to anything.
     func refreshInspection(ffmpeg: URL?) {
         problems = []
+        inspectionGeneration += 1
+        let generation = inspectionGeneration
+        isInspecting = false
         guard let ffmpeg else { return }
 
         let files = source == .folder
@@ -90,12 +103,12 @@ final class CombineVideosSession: ObservableObject {
 
         isInspecting = true
         Task {
-            let found = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let check = VideoConcatenator.preflight(files: files, ffmpeg: ffmpeg)
-                    continuation.resume(returning: check.problems)
-                }
+            let found = await Background.run {
+                let check = VideoConcatenator.preflight(files: files, ffmpeg: ffmpeg)
+                return check.problems
             }
+            // The list changed while ffmpeg was still describing the old one.
+            guard generation == inspectionGeneration else { return }
             problems = found
             isInspecting = false
         }
@@ -111,25 +124,20 @@ final class CombineVideosSession: ObservableObject {
 
         isRunning = true
         statusKind = .working
+        statusDetails = nil
         status = String(localized: "Joining…")
 
         Task {
-            let result = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        let output = try VideoConcatenator.concatenate(
-                            files: files,
-                            into: target,
-                            ffmpeg: ffmpeg,
-                            onStart: { process in
-                                DispatchQueue.main.async { [weak self] in self?.runningProcess = process }
-                            }
-                        )
-                        continuation.resume(returning: Result<URL, Error>.success(output))
-                    } catch {
-                        continuation.resume(returning: Result<URL, Error>.failure(error))
+            let result = await Background.attempt {
+                let output = try VideoConcatenator.concatenate(
+                    files: files,
+                    into: target,
+                    ffmpeg: ffmpeg,
+                    onStart: { process in
+                        DispatchQueue.main.async { [weak self] in self?.runningProcess = process }
                     }
-                }
+                )
+                return output
             }
 
             isRunning = false
@@ -146,6 +154,7 @@ final class CombineVideosSession: ObservableObject {
                 } ?? false
                 status = error.localizedDescription
                 statusKind = cancelled ? .idle : .failure
+                statusDetails = (error as? ToolLogCarrying)?.toolLog
             }
         }
     }
@@ -201,6 +210,11 @@ struct CombineVideosView: View {
                             isEnabled: !session.isRunning && !session.isInspecting,
                             onChoose: { session.chooseFolder(directory: directory, ffmpeg: ffmpeg) }
                         )
+                        .acceptsFileDrop(isEnabled: !session.isRunning && !session.isInspecting) { urls in
+                            if let folder = urls.first(where: FileDrop.isDirectory) {
+                                session.loadFolder(folder, directory: directory, ffmpeg: ffmpeg)
+                            }
+                        }
                     } else {
                         FileListEditor(
                             files: $session.pickedFiles,
@@ -209,6 +223,13 @@ struct CombineVideosView: View {
                             addTitle: "Add Videos…",
                             isEnabled: !session.isRunning && !session.isInspecting
                         )
+                        .acceptsFileDrop(isEnabled: !session.isRunning && !session.isInspecting) { urls in
+                            for url in urls
+                            where VideoConcatenator.acceptedExtensions.contains(url.pathExtension.lowercased())
+                                && !session.pickedFiles.contains(url) {
+                                session.pickedFiles.append(url)
+                            }
+                        }
                         .onChange(of: session.pickedFiles) { _ in session.refreshInspection(ffmpeg: ffmpeg) }
                     }
 
@@ -227,10 +248,10 @@ struct CombineVideosView: View {
                         }
                         Button("Clear") { session.clear() }
                             .disabled(!canClear)
-                        StatusLine(text: session.status, kind: session.statusKind)
+                        StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
                     }
                 }
-                .disabled(!isReady)
+                .disabled(!isReady && !session.isRunning)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)

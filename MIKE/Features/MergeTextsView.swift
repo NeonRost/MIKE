@@ -30,6 +30,7 @@ final class MergeTextsSession: ObservableObject {
 
     @Published var output = ""
     @Published var isRunning = false
+    @Published var isSaving = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
 
@@ -54,12 +55,8 @@ final class MergeTextsSession: ObservableObject {
         status = String(localized: "Merging…")
 
         Task {
-            let result = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(
-                        returning: TextMerger.merge(files: inputFiles, includeHeadings: headings, separator: separator)
-                    )
-                }
+            let result = await Background.run {
+                TextMerger.merge(files: inputFiles, includeHeadings: headings, separator: separator)
             }
 
             output = result.text
@@ -94,31 +91,39 @@ final class MergeTextsSession: ObservableObject {
     /// PDF and EPUB go through their own writers rather than `save(extension:)`:
     /// both are containers with a structure, not the text written out verbatim.
     func savePDF(directory: OutputDirectory) {
-        do {
-            let target = try TextDocumentWriter.pdf(
-                text: output,
-                into: directory.url,
-                stem: Self.outputStem
-            )
-            report(saved: target)
-        } catch {
-            status = error.localizedDescription
-            statusKind = .failure
+        let text = output
+        let target = directory.url
+        saveDocument {
+            try TextDocumentWriter.pdf(text: text, into: target, stem: Self.outputStem)
         }
     }
 
     func saveEPUB(directory: OutputDirectory) {
-        do {
-            let target = try EPUBBuilder.build(
-                text: output,
-                into: directory.url,
-                stem: Self.outputStem,
-                title: bookTitle
-            )
-            report(saved: target)
-        } catch {
-            status = error.localizedDescription
-            statusKind = .failure
+        let text = output
+        let target = directory.url
+        let title = bookTitle
+        saveDocument {
+            try EPUBBuilder.build(text: text, into: target, stem: Self.outputStem, title: title)
+        }
+    }
+
+    /// Off the main thread: laying a long text out into PDF pages takes long
+    /// enough to be felt, and the window should not stand still for it.
+    private func saveDocument(_ write: @escaping () throws -> URL) {
+        guard !isSaving else { return }
+        isSaving = true
+        statusKind = .working
+        status = String(localized: "Saving…")
+        Task {
+            let result = await Background.attempt(write)
+            isSaving = false
+            switch result {
+            case .success(let target):
+                report(saved: target)
+            case .failure(let error):
+                status = error.localizedDescription
+                statusKind = .failure
+            }
         }
     }
 
@@ -251,9 +256,9 @@ struct MergeTextsView: View {
                     Button("Save as Markdown") { session.save(extension: "md", directory: directory) }
                         .disabled(session.output.isEmpty)
                     Button("Save as PDF") { session.savePDF(directory: directory) }
-                        .disabled(session.output.isEmpty)
+                        .disabled(session.output.isEmpty || session.isSaving)
                     Button("Save as EPUB") { session.saveEPUB(directory: directory) }
-                        .disabled(session.output.isEmpty)
+                        .disabled(session.output.isEmpty || session.isSaving)
                 }
             }
             .padding(.top, 4)
@@ -264,48 +269,13 @@ struct MergeTextsView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard !session.isRunning, !providers.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        // Collected on a lock, not `files` directly: `loadItem`'s completion
-        // handlers arrive on an arbitrary queue, never the main actor.
-        let collected = DropCollector()
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                let url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else {
-                    url = item as? URL
-                }
-                // No extension filtering here either — the same "let the read
-                // attempt decide" rule as the picker and the merge itself.
-                guard let url else { return }
-                collected.append(url)
-            }
-        }
-
-        group.notify(queue: .main) {
-            for url in collected.value where !session.files.contains(url) {
+        // No extension filtering here either — the same "let the read attempt
+        // decide" rule as the picker and the merge itself.
+        FileDrop.urls(from: providers) { urls in
+            for url in urls where !session.files.contains(url) {
                 session.files.append(url)
             }
         }
         return true
-    }
-}
-
-/// Minimal mutable box guarded by a lock, for collecting drop results that
-/// arrive on an arbitrary queue before handing them to the main actor.
-private final class DropCollector {
-    private var storage: [URL] = []
-    private let lock = NSLock()
-
-    var value: [URL] { lock.lock(); defer { lock.unlock() }; return storage }
-
-    func append(_ url: URL) {
-        lock.lock(); defer { lock.unlock() }
-        storage.append(url)
     }
 }

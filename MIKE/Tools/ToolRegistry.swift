@@ -148,6 +148,16 @@ final class ToolRegistry: ObservableObject {
             let brew = ToolLocator.locateHomebrew()
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                // A tool that was there a moment ago and merely failed to
+                // answer in time is still there. Believing the timeout would
+                // disable a section — while it is working — because the
+                // machine is busy doing what the section asked for.
+                var result = result
+                for (tool, status) in result where status.inconclusive {
+                    if let previous = self.statuses[tool], previous.isAvailable {
+                        result[tool] = previous
+                    }
+                }
                 self.statuses = result
                 self.homebrew = brew
                 self.lastCheck = Date()

@@ -43,6 +43,24 @@ enum ImageFormat: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Every extension a file of this format turns up with, lowercased.
+    /// `fileExtension` is the one MIKE *writes*; reading has to accept the
+    /// others too. Matching on the written one alone made a folder of
+    /// `.jpeg` or `.tif` files look empty to the batch converter.
+    var sourceExtensions: [String] {
+        switch self {
+        case .jpeg: return ["jpg", "jpeg", "jpe"]
+        case .tiff: return ["tiff", "tif"]
+        case .png, .heic, .heif, .webp, .bmp, .gif: return [fileExtension]
+        }
+    }
+
+    /// The format a file extension stands for, if MIKE knows it.
+    static func forExtension(_ ext: String) -> ImageFormat? {
+        let lowered = ext.lowercased()
+        return allCases.first { $0.sourceExtensions.contains(lowered) }
+    }
+
     /// ImageIO cannot *write* WebP (it reads it fine), so that one format
     /// goes out through an external encoder.
     var requiresExternalEncoder: Bool { self == .webp }
@@ -113,17 +131,77 @@ enum ImageConverter {
 
     // MARK: - Loading
 
+    /// The image the way it is meant to be seen — EXIF orientation applied.
+    ///
+    /// A camera does not turn its pixels when it is held upright; it stores
+    /// them as the sensor read them and records "rotate this 90°" in an
+    /// orientation tag. Reading the raw pixels and writing them out without
+    /// that tag therefore turns every portrait phone photo on its side —
+    /// which is what Convert Format and Combine Images did. Verified: a
+    /// 400×200 source tagged orientation 6 (shown 200×400) came out of the
+    /// converter as an untagged 400×200.
     static func load(from url: URL) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw ImageConversionError.cannotRead
+        }
+        return try uprightImage(from: source)
+    }
+
+    static func load(from data: Data) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw ImageConversionError.cannotRead
+        }
+        return try uprightImage(from: source)
+    }
+
+    /// The pixels exactly as stored, orientation tag ignored. Only for a
+    /// caller that deals with the orientation itself: Read Image Text hands
+    /// Vision the raw image together with the tag, which is how Vision wants
+    /// it.
+    static func loadUnrotated(from url: URL) throws -> CGImage {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { throw ImageConversionError.cannotRead }
         return image
     }
 
-    static func load(from data: Data) throws -> CGImage {
+    static func loadUnrotated(from data: Data) throws -> CGImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { throw ImageConversionError.cannotRead }
+        return image
+    }
+
+    private static func uprightImage(from source: CGImageSource) throws -> CGImage {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let orientation = (properties?[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+
+        // Already upright, which is most files: the untouched decode, with no
+        // re-render that could cost colour depth.
+        guard (2...8).contains(orientation),
+              let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
+        else {
+            guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw ImageConversionError.cannotRead
+            }
+            return image
+        }
+
+        // ImageIO's own transform: a "thumbnail" at the image's full size is
+        // the documented way to get the oriented pixels without redoing the
+        // eight cases by hand.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+        ]
+        if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            return image
+        }
+        guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw ImageConversionError.cannotRead
+        }
         return image
     }
 
@@ -135,9 +213,25 @@ enum ImageConverter {
     /// directly: without this, every image MIKE writes through
     /// `CGImageDestination` loses all EXIF/GPS silently, not just the fields
     /// a feature meant to strip.
+    ///
+    /// The orientation is reset to "upright" on the way: `load(from:)` has
+    /// already turned the pixels, and carrying the old tag along would turn
+    /// them a second time in every viewer.
     static func metadata(from url: URL) -> [CFString: Any]? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              var properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        else { return nil }
+
+        properties[kCGImagePropertyOrientation] = 1
+        if var tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+            tiff[kCGImagePropertyTIFFOrientation] = 1
+            properties[kCGImagePropertyTIFFDictionary] = tiff
+        }
+        // Describe the stored pixels of the *source*; ImageIO writes the real
+        // ones for the new file, and stale values would only contradict it.
+        properties[kCGImagePropertyPixelWidth] = nil
+        properties[kCGImagePropertyPixelHeight] = nil
+        return properties
     }
 
     static func download(from url: URL) async throws -> Data {
@@ -299,15 +393,10 @@ enum ImageConverter {
             label = "ffmpeg"
         }
 
-        var lastLines: [String] = []
-        let status = ProcessRunner.stream(executable: executable, arguments: arguments) { line in
-            lastLines.append(line)
-            if lastLines.count > 10 { lastLines.removeFirst() }
-        }
-
-        guard status == 0 else {
-            let detail = lastLines.last.map { String($0.prefix(140)) } ?? "exit \(status)"
-            throw ImageConversionError.encoderFailed("\(label): \(detail)")
+        let outcome = ProcessRunner.run(executable: executable, arguments: arguments)
+        guard outcome.succeeded else {
+            try? FileManager.default.removeItem(at: url)
+            throw ImageConversionError.encoderFailed("\(label): \(outcome.failureSummary(tool: label))")
         }
     }
 
@@ -331,7 +420,7 @@ enum ImageConverter {
 
     // MARK: - Batch scanning
 
-    /// Files in `folder` matching `format`'s extension, top level only — no
+    /// Files in `folder` matching one of `format`'s extensions, top level only — no
     /// recursion into subfolders. Sorted the way the Finder sorts, so `img2`
     /// comes before `img10`.
     static func candidates(in folder: URL, format: ImageFormat) -> [URL] {
@@ -343,7 +432,7 @@ enum ImageConverter {
 
         return contents
             .filter { url in
-                guard url.pathExtension.lowercased() == format.fileExtension else { return false }
+                guard format.sourceExtensions.contains(url.pathExtension.lowercased()) else { return false }
                 return (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false
             }
             .sorted {

@@ -16,6 +16,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Survives navigating away from and back to Metadata — see
 /// `ArticleExtractionSession` for why this is needed at all.
@@ -37,6 +38,7 @@ final class MetadataSession: ObservableObject {
     @Published var isWorking = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
 
     // The confirmation shown when a `_original` backup is already present.
     @Published var pendingAction: MetadataAction?
@@ -46,12 +48,19 @@ final class MetadataSession: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
 
+        load(chosen)
+    }
+
+    func load(_ chosen: URL) {
+        guard !isWorking else { return }
         sourceFile = chosen
         status = ""
         statusKind = .idle
+        statusDetails = nil
         reloadMetadata()
     }
 
@@ -128,16 +137,14 @@ final class MetadataSession: ObservableObject {
 
         isWorking = true
         statusKind = .working
+        statusDetails = nil
         status = String(localized: "Working…")
 
         Task {
             do {
-                let result = try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do { continuation.resume(returning: try work(file)) }
-                        catch { continuation.resume(throwing: error) }
-                    }
-                }
+                let result = try await Background.attempt {
+                    return try work(file)
+                }.get()
                 switch result {
                 case .updated(let backup):
                     status = message(for: backup)
@@ -150,6 +157,7 @@ final class MetadataSession: ObservableObject {
             } catch {
                 status = error.localizedDescription
                 statusKind = .failure
+                statusDetails = (error as? ToolLogCarrying)?.toolLog
             }
             isWorking = false
         }
@@ -161,11 +169,6 @@ final class MetadataSession: ObservableObject {
             return String(localized: "Done. The original was saved as a “_original” file next to it.")
         case .preserved:
             return String(localized: "Done. The existing “_original” backup was left untouched.")
-        case .skipped:
-            // Unreachable here: this section never sets `skipBackup`. Kept
-            // exhaustive rather than a `default:` so a future change that
-            // does pass it can't fall through silently.
-            return String(localized: "Done.")
         }
     }
 
@@ -242,6 +245,9 @@ struct MetadataView: View {
                         onChoose: { session.chooseFile() },
                         onClear: { session.clear() }
                     )
+                    .acceptsFileDrop(isEnabled: !session.isWorking) { urls in
+                        if let url = urls.first(where: FileDrop.isFile) { session.load(url) }
+                    }
                     Spacer(minLength: 0)
                     Button("Clear") { session.clear() }
                         .disabled(!canClear)
@@ -350,7 +356,7 @@ struct MetadataView: View {
                 Button("Apply changes") { session.start(.edit, exiftool: tools.status(for: .exiftool).url) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canEdit || session.isWorking)
-                StatusLine(text: session.status, kind: session.statusKind)
+                StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
             }
         }
     }

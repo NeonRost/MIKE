@@ -42,7 +42,7 @@ enum EmbeddedExifReader {
             // duplicate tags, -b would base64 binaries so it is left off.
             arguments: ["-j", "-G1", "-struct", "-a", "-q", "-q", "-charset", "UTF8", url.path],
             timeout: 25
-        ), result.status == 0 else { return [] }
+        ), result.status == 0, !result.timedOut else { return [] }
 
         // Be forgiving about anything printed before the array.
         guard let start = result.output.firstIndex(of: "["),
@@ -51,7 +51,11 @@ enum EmbeddedExifReader {
               let object = array.first
         else { return [] }
 
-        // Bucket keys by their group prefix, preserving exiftool's order.
+        // Bucket keys by their group prefix. A decoded JSON object is a
+        // dictionary and has no order of its own — exiftool's is lost by the
+        // time it gets here — so each group's entries are sorted by tag name
+        // below. Left as they came, they turned up in a different order on
+        // every reload.
         var order: [String] = []
         var buckets: [String: [(tag: String, value: Any)]] = [:]
 
@@ -74,9 +78,11 @@ enum EmbeddedExifReader {
 
         return sortedGroups.compactMap { group in
             let isXMP = group.lowercased().hasPrefix("xmp")
-            let entries = buckets[group]!.map { pair in
-                entry(group: group, tag: pair.tag, value: pair.value, editable: isXMP)
-            }
+            let entries = buckets[group]!
+                .sorted { $0.tag.localizedStandardCompare($1.tag) == .orderedAscending }
+                .map { pair in
+                    entry(group: group, tag: pair.tag, value: pair.value, editable: isXMP)
+                }
             guard !entries.isEmpty else { return nil }
             return EmbeddedGroup(
                 title: group,

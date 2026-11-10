@@ -27,6 +27,8 @@ struct FileHashes: Equatable {
 enum HashCalculationError: Error {
     case cancelled
     case cannotOpen
+    /// The file opened but could not be read to its end.
+    case readFailed
 }
 
 enum HashCalculator {
@@ -58,8 +60,7 @@ enum HashCalculator {
 
         while true {
             if Task.isCancelled { throw HashCalculationError.cancelled }
-            let chunk = (try? handle.read(upToCount: chunkSize)) ?? nil
-            guard let chunk, !chunk.isEmpty else { break }
+            guard let chunk = try readChunk(from: handle) else { break }
 
             md5.update(data: chunk)
             sha1.update(data: chunk)
@@ -85,6 +86,25 @@ enum HashCalculator {
         )
     }
 
+    /// The next chunk, or `nil` at the real end of the file.
+    ///
+    /// A read that *fails* is thrown, never folded into "end of file". It
+    /// used to be: `try?` turned an I/O error into an empty read, the loop
+    /// ended, and the digest of however much had been read so far was handed
+    /// back as the file's hash — a wrong checksum presented as a right one,
+    /// and in the duplicate scan two unreadable files of the same size
+    /// "matched" and were offered for the Trash.
+    private static func readChunk(from handle: FileHandle) throws -> Data? {
+        let chunk: Data?
+        do {
+            chunk = try handle.read(upToCount: chunkSize)
+        } catch {
+            throw HashCalculationError.readFailed
+        }
+        guard let chunk, !chunk.isEmpty else { return nil }
+        return chunk
+    }
+
     private static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
         digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -103,8 +123,7 @@ enum HashCalculator {
         var hasher = SHA256()
         while true {
             if Task.isCancelled { throw HashCalculationError.cancelled }
-            let chunk = (try? handle.read(upToCount: chunkSize)) ?? nil
-            guard let chunk, !chunk.isEmpty else { break }
+            guard let chunk = try readChunk(from: handle) else { break }
             hasher.update(data: chunk)
         }
         return hex(hasher.finalize())

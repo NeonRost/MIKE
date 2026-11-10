@@ -48,8 +48,18 @@ final class QuickEditSession: ObservableObject {
     @Published var removeAllMetadata = false
 
     @Published var isSaving = false
+    @Published var isLoading = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+
+    /// The rotated preview for the current angle. Rotating the preview is a
+    /// full redraw of a 1400px image, and the canvas asks for it on every
+    /// body evaluation — every tick of a crop drag included — so it is kept
+    /// until the angle or the image actually changes.
+    private var previewCache: (angle: Double, image: NSImage)?
+    /// Counts loads, so a slow decode of a file the user has since replaced
+    /// does not land on top of the newer one.
+    private var loadGeneration = 0
 
     static let selectableFormats: [ImageFormat] = [.jpeg, .png, .tiff, .webp]
     static let minCropSize: CGFloat = 10
@@ -75,7 +85,7 @@ final class QuickEditSession: ObservableObject {
     /// it at all.
     private var sourceFormat: ImageFormat? {
         guard let sourceFile else { return nil }
-        return ImageFormat.allCases.first { $0.fileExtension == sourceFile.pathExtension.lowercased() }
+        return ImageFormat.forExtension(sourceFile.pathExtension)
     }
 
     /// What "Keep original format" actually resolves to. HEIC/HEIF can never
@@ -98,30 +108,55 @@ final class QuickEditSession: ObservableObject {
 
     // MARK: - Loading
 
+    /// Decodes off the main thread: a large HEIC or TIFF takes long enough to
+    /// read and scale down that doing it inline froze the window for the
+    /// duration.
     func load(_ url: URL) {
-        guard let image = try? ImageConverter.load(from: url) else {
-            status = String(localized: "The image could not be read.")
-            statusKind = .failure
-            return
-        }
-        sourceFile = url
-        sourceImage = image
-        sourceMetadata = ImageConverter.metadata(from: url)
-        previewBase = ImageEditor.previewBase(of: image)
-        explicitFormat = nil
-        quarterTurns = 0
-        fineAngle = 0
-        fineAngleText = "0.0"
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoading = true
         status = ""
         statusKind = .idle
-        resetCropToFullCanvas()
+
+        Task {
+            let loaded: (image: CGImage, metadata: [CFString: Any]?, preview: CGImage)? =
+                await Background.run {
+                    guard let image = try? ImageConverter.load(from: url) else {
+                        return nil
+                    }
+                    let metadata = ImageConverter.metadata(from: url)
+                    let preview = ImageEditor.previewBase(of: image)
+                    return (image, metadata, preview)
+                }
+
+            guard generation == loadGeneration else { return }
+            isLoading = false
+            guard let loaded else {
+                status = String(localized: "The image could not be read.")
+                statusKind = .failure
+                return
+            }
+            sourceFile = url
+            sourceImage = loaded.image
+            sourceMetadata = loaded.metadata
+            previewBase = loaded.preview
+            previewCache = nil
+            explicitFormat = nil
+            quarterTurns = 0
+            fineAngle = 0
+            fineAngleText = "0.0"
+            resetCropToFullCanvas()
+        }
     }
 
     func clear() {
+        loadGeneration += 1
+        isLoading = false
         sourceFile = nil
         sourceImage = nil
         sourceMetadata = nil
         previewBase = nil
+        previewCache = nil
         cropRect = .zero
         explicitFormat = nil
         jpegQuality = 100
@@ -132,6 +167,15 @@ final class QuickEditSession: ObservableObject {
         fineAngleText = "0.0"
         status = ""
         statusKind = .idle
+    }
+
+    func rotatedPreview() -> NSImage? {
+        guard let previewBase else { return nil }
+        if let previewCache, previewCache.angle == totalAngle { return previewCache.image }
+        let rotated = (try? ImageEditor.rotate(previewBase, degrees: totalAngle)) ?? previewBase
+        let image = NSImage(cgImage: rotated, size: NSSize(width: rotated.width, height: rotated.height))
+        previewCache = (totalAngle, image)
+        return image
     }
 
     // MARK: - Crop field sync
@@ -162,18 +206,55 @@ final class QuickEditSession: ObservableObject {
         syncCropFields()
     }
 
+    func applyAngleText() {
+        if let value = Double(fineAngleText.replacingOccurrences(of: ",", with: ".")), value.isFinite {
+            let clamped = min(max(value, -45), 45)
+            if clamped != fineAngle {
+                fineAngle = clamped
+                resetCropToFullCanvas()
+            }
+        }
+        fineAngleText = String(format: "%.1f", fineAngle)
+    }
+
+    /// Takes over whatever is typed into the angle and crop fields. They
+    /// commit on Return or on losing focus, and pressing Save guarantees
+    /// neither — the picture saved has to be the one the fields describe.
+    /// A changed angle resets the crop (as it does everywhere else), so the
+    /// crop fields are only read when the angle stood.
+    func commitTextFields() {
+        let before = fineAngle
+        applyAngleText()
+        if fineAngle == before {
+            applyCropFieldsFromText()
+        }
+    }
+
     // MARK: - Save
 
-    func save(webpEncoder: WebPEncoder?, exiftool: URL?, target: URL) {
+    func save(webpEncoder: WebPEncoder?, target: URL) {
         guard let sourceImage else { return }
 
         let angle = totalAngle
         let rect = cropRect
         let format = effectiveFormat
         let quality = jpegQuality / 100
-        let metadata = sourceMetadata
-        let stripAll = removeAllMetadata
-        let stripGPS = removeGPS
+
+        // Stripping happens here, by not writing what should not be there —
+        // no second pass over the finished file. A `CGImage` carries no
+        // metadata of its own, so the output holds exactly what this
+        // dictionary holds: leave the GPS block out and there is no location;
+        // pass nothing and there is no metadata. This used to go through
+        // exiftool afterwards, which made the most privacy-relevant switch in
+        // the section depend on an optional tool, and left a file with its
+        // location intact on disk whenever that second step failed.
+        var metadata = sourceMetadata
+        if removeAllMetadata {
+            metadata = nil
+        } else if removeGPS {
+            metadata?[kCGImagePropertyGPSDictionary] = nil
+        }
+        let outputMetadata = metadata
 
         isSaving = true
         statusKind = .working
@@ -181,25 +262,10 @@ final class QuickEditSession: ObservableObject {
 
         Task {
             do {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            let processed = try ImageEditor.process(sourceImage, degrees: angle, cropRect: rect)
-                            try ImageConverter.write(image: processed, to: target, format: format, webpEncoder: webpEncoder, quality: quality, metadata: metadata)
-
-                            if let exiftool {
-                                if stripAll {
-                                    _ = try MetadataWriter.removeAll(from: target, exiftool: exiftool, skipBackup: true)
-                                } else if stripGPS {
-                                    _ = try MetadataWriter.removeGPS(from: target, exiftool: exiftool, skipBackup: true)
-                                }
-                            }
-                            continuation.resume()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
+                try await Background.attempt {
+                    let processed = try ImageEditor.process(sourceImage, degrees: angle, cropRect: rect)
+                    try ImageConverter.write(image: processed, to: target, format: format, webpEncoder: webpEncoder, quality: quality, metadata: outputMetadata)
+                }.get()
                 status = String(
                     localized: "Saved: \(target.lastPathComponent)",
                     comment: "Placeholder is the written file name"
@@ -223,7 +289,6 @@ struct QuickEditView: View {
 
     private var webpEncoder: WebPEncoder? { tools.webpEncoder }
     private var canEncodeWebP: Bool { webpEncoder != nil }
-    private var exiftoolAvailable: Bool { tools.isAvailable(.exiftool) }
     private var canSave: Bool { session.canSave(canEncodeWebP: canEncodeWebP) }
     private var canClear: Bool { session.sourceFile != nil }
 
@@ -253,9 +318,9 @@ struct QuickEditView: View {
 
     @ViewBuilder
     private var canvasArea: some View {
-        if let previewBase = session.previewBase {
+        if let previewImage = session.rotatedPreview() {
             CropCanvas(
-                previewImage: rotatedPreviewImage(previewBase),
+                previewImage: previewImage,
                 rotatedFullSize: session.rotatedFullSize,
                 cropRect: $session.cropRect,
                 minCropSize: QuickEditSession.minCropSize,
@@ -263,6 +328,9 @@ struct QuickEditView: View {
             )
             .onChange(of: session.cropRect) { _ in session.syncCropFields() }
             .padding(20)
+        } else if session.isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "crop")
@@ -283,11 +351,6 @@ struct QuickEditView: View {
         }
     }
 
-    private func rotatedPreviewImage(_ base: CGImage) -> NSImage {
-        let rotated = (try? ImageEditor.rotate(base, degrees: session.totalAngle)) ?? base
-        return NSImage(cgImage: rotated, size: NSSize(width: rotated.width, height: rotated.height))
-    }
-
     // MARK: - Controls
 
     @ViewBuilder
@@ -301,7 +364,7 @@ struct QuickEditView: View {
             FileRow(
                 label: "Image file",
                 file: session.sourceFile,
-                isEnabled: !session.isSaving,
+                isEnabled: !session.isSaving && !session.isLoading,
                 onChoose: chooseFile,
                 onClear: { session.clear() }
             )
@@ -338,12 +401,8 @@ struct QuickEditView: View {
                 TextField(text: $session.fineAngleText) { EmptyView() }
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 56)
-                    .onSubmit {
-                        if let value = Double(session.fineAngleText) {
-                            session.fineAngle = min(max(value, -45), 45)
-                        }
-                        session.fineAngleText = String(format: "%.1f", session.fineAngle)
-                    }
+                    .onSubmit { session.applyAngleText() }
+                    .commitOnBlur { session.applyAngleText() }
                 Text(verbatim: "°")
                     .foregroundStyle(.secondary)
             }
@@ -397,6 +456,7 @@ struct QuickEditView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
                 .onSubmit { session.applyCropFieldsFromText() }
+                .commitOnBlur { session.applyCropFieldsFromText() }
         }
     }
 
@@ -485,21 +545,8 @@ struct QuickEditView: View {
                 .font(.headline)
 
             Toggle("Remove GPS data", isOn: $session.removeGPS)
-                .disabled(!exiftoolAvailable || session.removeAllMetadata)
+                .disabled(session.removeAllMetadata)
             Toggle("Remove all metadata", isOn: $session.removeAllMetadata)
-                .disabled(!exiftoolAvailable)
-
-            if !exiftoolAvailable {
-                HStack(spacing: 4) {
-                    Text("Needs exiftool to remove metadata. Saving without removal still works.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Setup", action: onOpenTools)
-                        .buttonStyle(.link)
-                        .font(.caption)
-                }
-            }
         }
         .disabled(session.isSaving)
     }
@@ -512,7 +559,7 @@ struct QuickEditView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
                 Button("Clear") { session.clear() }
-                    .disabled(!canClear)
+                    .disabled(!canClear || session.isSaving)
                 StatusLine(text: session.status, kind: session.statusKind)
             }
             Text("The original file is never changed — Save always writes a new file.")
@@ -535,17 +582,12 @@ struct QuickEditView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isSaving, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url, QuickEditSession.acceptedExtensions.contains(url.pathExtension.lowercased())
-            else { return }
-            DispatchQueue.main.async { session.load(url) }
+        guard !session.isSaving, !session.isLoading, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first(where: {
+                QuickEditSession.acceptedExtensions.contains($0.pathExtension.lowercased())
+            }) else { return }
+            session.load(url)
         }
         return true
     }
@@ -554,6 +596,7 @@ struct QuickEditView: View {
 
     private func save() {
         guard canSave, let sourceFile = session.sourceFile else { return }
+        session.commitTextFields()
 
         let format = session.effectiveFormat
         let panel = NSSavePanel()
@@ -571,7 +614,7 @@ struct QuickEditView: View {
         panel.prompt = String(localized: "Save", comment: "Confirm button in the save dialog")
         guard panel.runModal() == .OK, let target = panel.url else { return }
 
-        session.save(webpEncoder: webpEncoder, exiftool: tools.status(for: .exiftool).url, target: target)
+        session.save(webpEncoder: webpEncoder, target: target)
     }
 }
 
@@ -589,88 +632,19 @@ private struct CropCanvas: View {
     let minCropSize: CGFloat
     let isEnabled: Bool
 
-    @State private var dragStartRect: CGRect?
-
-    private let handleDiameter: CGFloat = 11
-
     var body: some View {
-        GeometryReader { geo in
-            let scale = displayScale(for: geo.size)
-            let displaySize = CGSize(width: rotatedFullSize.width * scale, height: rotatedFullSize.height * scale)
-            let origin = CGPoint(x: (geo.size.width - displaySize.width) / 2, y: (geo.size.height - displaySize.height) / 2)
-            let displayRect = CGRect(
-                x: origin.x + cropRect.origin.x * scale,
-                y: origin.y + cropRect.origin.y * scale,
-                width: cropRect.width * scale,
-                height: cropRect.height * scale
+        ZStack {
+            // Aspect-fitted and centred — the same placement `CropOverlay`
+            // assumes for the picture it frames.
+            Image(nsImage: previewImage)
+                .resizable()
+                .aspectRatio(rotatedFullSize, contentMode: .fit)
+            CropOverlay(
+                displaySize: rotatedFullSize,
+                cropRect: $cropRect,
+                minCropSize: minCropSize,
+                isEnabled: isEnabled
             )
-
-            ZStack(alignment: .topLeading) {
-                Image(nsImage: previewImage)
-                    .resizable()
-                    .frame(width: displaySize.width, height: displaySize.height)
-                    .position(x: origin.x + displaySize.width / 2, y: origin.y + displaySize.height / 2)
-
-                // Even-odd fill: the outer rect minus the crop rect, dimmed —
-                // darkens everything outside the frame, leaves the inside clear.
-                Path { path in
-                    path.addRect(CGRect(origin: .zero, size: geo.size))
-                    path.addRect(displayRect)
-                }
-                .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
-                .allowsHitTesting(false)
-
-                Rectangle()
-                    .strokeBorder(Color.white, lineWidth: 1.5)
-                    .frame(width: max(displayRect.width, 0), height: max(displayRect.height, 0))
-                    .position(x: displayRect.midX, y: displayRect.midY)
-                    .contentShape(Rectangle())
-                    .gesture(isEnabled ? moveGesture(scale: scale) : nil)
-
-                if isEnabled {
-                    ForEach(Array(CropHandle.allCases.enumerated()), id: \.offset) { _, handle in
-                        let position = CropGeometry.handlePosition(handle, in: displayRect)
-                        Circle()
-                            .fill(Color.white)
-                            .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
-                            .frame(width: handleDiameter, height: handleDiameter)
-                            .contentShape(Circle().inset(by: -8))
-                            .position(position)
-                            .gesture(dragGesture(for: handle, scale: scale))
-                    }
-                }
-            }
-            .clipped()
         }
-    }
-
-    private func displayScale(for size: CGSize) -> CGFloat {
-        guard rotatedFullSize.width > 0, rotatedFullSize.height > 0, size.width > 0, size.height > 0 else { return 1 }
-        return min(size.width / rotatedFullSize.width, size.height / rotatedFullSize.height)
-    }
-
-    private func dragGesture(for handle: CropHandle, scale: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged { value in
-                if dragStartRect == nil { dragStartRect = cropRect }
-                guard let start = dragStartRect else { return }
-                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                cropRect = CropGeometry.applyHandleDrag(handle, delta: delta, start: start, bounds: rotatedFullSize, minSize: minCropSize)
-            }
-            .onEnded { _ in dragStartRect = nil }
-    }
-
-    private func moveGesture(scale: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
-            .onChanged { value in
-                if dragStartRect == nil { dragStartRect = cropRect }
-                guard let start = dragStartRect else { return }
-                let delta = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                var rect = start
-                rect.origin.x += delta.width
-                rect.origin.y += delta.height
-                cropRect = CropGeometry.clamp(rect, to: rotatedFullSize, minSize: minCropSize)
-            }
-            .onEnded { _ in dragStartRect = nil }
     }
 }

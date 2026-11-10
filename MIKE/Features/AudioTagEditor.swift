@@ -20,6 +20,20 @@ import Foundation
 enum TagField: String, CaseIterable {
     case title, artist, albumArtist, album, year, track, genre, comment
 
+    /// Other spellings the same field turns up under when *reading*, already
+    /// lowercased. ffmpeg normalises most Vorbis-comment names on the way in
+    /// (`TRACKNUMBER` arrives as `track`), but not every one in every version,
+    /// and a file tagged by another tool can carry either.
+    var readAliases: [String] {
+        switch self {
+        case .albumArtist: return ["albumartist", "album artist"]
+        case .year: return ["year"]
+        case .track: return ["tracknumber"]
+        case .comment: return ["description"]
+        case .title, .artist, .album, .genre: return []
+        }
+    }
+
     /// The `-metadata` key ffmpeg actually uses. Verified against real files in
     /// every accepted format — these are not guessed from documentation.
     var ffmpegKey: String {
@@ -118,14 +132,19 @@ struct AudioFormatCapabilities {
     }
 }
 
-enum AudioTagError: LocalizedError {
-    case ffmpegFailed(String)
+enum AudioTagError: LocalizedError, ToolLogCarrying {
+    case ffmpegFailed(String, log: String)
 
     var errorDescription: String? {
         switch self {
         // ffmpeg's own output, passed through untranslated.
-        case .ffmpegFailed(let detail): return "ffmpeg: \(detail)"
+        case .ffmpegFailed(let detail, _): return "ffmpeg: \(detail)"
         }
+    }
+
+    var toolLog: String? {
+        if case .ffmpegFailed(_, let log) = self, !log.isEmpty { return log }
+        return nil
     }
 }
 
@@ -151,32 +170,54 @@ enum AudioTagEditor {
         var tags = AudioTags()
         guard let result = ProcessRunner.capture(
             executable: ffmpeg, arguments: ["-hide_banner", "-i", url.path], timeout: 15
-        ) else { return tags }
+        ), !result.timedOut, !result.cancelled else { return tags }
 
         let raw = collectMetadata(from: result.output)
         for field in TagField.allCases {
-            if let value = raw[field.ffmpegKey] {
-                tags[field] = value
+            for key in [field.ffmpegKey] + field.readAliases {
+                if let value = raw[key] {
+                    tags[field] = value
+                    break
+                }
             }
         }
         return tags
     }
 
-    /// Parses every `Metadata:` block in an `ffmpeg -i` banner into one
-    /// key/value map, regardless of whether it sits at the container level or
-    /// under a particular stream.
+    /// Parses the `Metadata:` blocks in an `ffmpeg -i` banner into one
+    /// key/value map — the container's and every *audio* stream's.
+    ///
+    /// Two things real files do that ffmpeg-written test files did not:
+    ///
+    /// - Keys come back in whatever case the file stores them. Vorbis comments
+    ///   (FLAC, Ogg, Opus) are conventionally upper case — `ARTIST`, `TITLE`,
+    ///   `ALBUM` — and ffmpeg prints them that way, so the map is keyed in
+    ///   lower case and looked up in lower case. Verified: a FLAC tagged
+    ///   `ARTIST`/`TITLE`/`ALBUM` read back with every field empty before this.
+    /// - An embedded cover is a video stream with a `Metadata:` block of its
+    ///   own (`title: Album cover`, `comment: Cover (front)`). That describes
+    ///   the picture, not the recording. Read as file tags, it put "Cover
+    ///   (front)" into the Comment field of every MP3 that had a cover and no
+    ///   comment — and saving then wrote it as a real tag. Blocks under a
+    ///   video stream are skipped.
     private static func collectMetadata(from bannerText: String) -> [String: String] {
         var result: [String: String] = [:]
         var metadataIndent: Int? = nil
-        let keyValue = try! NSRegularExpression(pattern: #"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s?(.*)$"#)
+        var underVideoStream = false
+        let keyValue = try! NSRegularExpression(pattern: #"^([A-Za-z_][A-Za-z0-9_ ]*?)\s*:\s?(.*)$"#)
 
         for rawLine in bannerText.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(rawLine)
             let indent = line.prefix { $0 == " " }.count
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
+            if trimmed.hasPrefix("Stream #") {
+                underVideoStream = trimmed.contains("Video:")
+                metadataIndent = nil
+                continue
+            }
             if trimmed == "Metadata:" {
-                metadataIndent = indent
+                metadataIndent = underVideoStream ? nil : indent
                 continue
             }
             guard let blockIndent = metadataIndent else { continue }
@@ -188,7 +229,7 @@ enum AudioTagEditor {
                   let valueRange = Range(match.range(at: 2), in: trimmed)
             else { continue }
 
-            let key = String(trimmed[keyRange])
+            let key = String(trimmed[keyRange]).lowercased()
             // First occurrence wins: container-level metadata (which appears
             // first in the banner) is the more meaningful location when a key
             // happens to appear more than once.
@@ -270,27 +311,14 @@ enum AudioTagEditor {
 
         arguments.append(temp.path)
 
-        var lastLines: [String] = []
-        var launched: Process?
-        let status = ProcessRunner.stream(
-            executable: ffmpeg,
-            arguments: arguments,
-            onStart: { process in
-                launched = process
-                onStart?(process)
-            }
-        ) { line in
-            lastLines.append(line)
-            if lastLines.count > 20 { lastLines.removeFirst() }
-        }
+        let outcome = ProcessRunner.run(executable: ffmpeg, arguments: arguments, onStart: onStart)
 
-        guard status == 0 else {
+        guard outcome.succeeded else {
             try? FileManager.default.removeItem(at: temp)
-            if launched?.terminationReason == .uncaughtSignal {
-                throw CancellationError()
-            }
-            let detail = lastLines.last.map { String($0.prefix(140)) } ?? "exit \(status)"
-            throw AudioTagError.ffmpegFailed(detail)
+            if outcome.cancelled { throw CancellationError() }
+            throw AudioTagError.ffmpegFailed(
+                outcome.failureSummary(tool: "ffmpeg"), log: outcome.logText
+            )
         }
 
         do {

@@ -52,9 +52,11 @@ final class DownloadSession: ObservableObject {
     @Published var isRunning = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
     /// Held so Cancel can stop the running yt-dlp. Never read by the view, so
     /// it does not need to be `@Published`.
     private var runningProcess: Process?
+    private var probeProcess: Process?
 
     var trimmedURL: String { urlText.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -90,7 +92,11 @@ final class DownloadSession: ObservableObject {
     func cancel() {
         guard let process = runningProcess, process.isRunning else { return }
         status = String(localized: "Cancelling…")
-        process.terminate()
+        ProcessRunner.cancel(process)
+    }
+
+    func cancelProbe() {
+        if let probeProcess { ProcessRunner.cancel(probeProcess) }
     }
 
     /// Resets everything the user typed or received — the URL, every toggle
@@ -116,9 +122,10 @@ final class DownloadSession: ObservableObject {
         selectedVideoHeight = nil
         status = ""
         statusKind = .idle
+        statusDetails = nil
     }
 
-    func fetchDuration(ytDlp: URL?) {
+    func fetchDuration(ytDlp: URL?, ffmpeg: URL?) {
         guard WebURL.isValid(trimmedURL) else {
             durationText = nil
             durationError = String(localized: "That is not a valid URL.")
@@ -135,10 +142,8 @@ final class DownloadSession: ObservableObject {
         durationError = nil
 
         Task {
-            let value = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: DownloadRunner.fetchDuration(urlString: target, ytDlp: ytDlp))
-                }
+            let value = await Background.run {
+                return DownloadRunner.fetchDuration(urlString: target, ytDlp: ytDlp, ffmpeg: ffmpeg)
             }
             // Same stale-guard as the quality probe: an answer for a URL the
             // user has since edited away from is not applied.
@@ -172,7 +177,7 @@ final class DownloadSession: ObservableObject {
         return String(format: "%02d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
     }
 
-    func startProbe(ytDlp: URL?) {
+    func startProbe(ytDlp: URL?, ffmpeg: URL?) {
         guard WebURL.isValid(trimmedURL) else {
             probeError = String(localized: "That is not a valid URL.")
             probedURL = trimmedURL
@@ -189,10 +194,24 @@ final class DownloadSession: ObservableObject {
         probeError = nil
 
         Task {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<FormatProbeResult, FormatProbeError>, Never>) in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: FormatProbe.run(urlString: target, ytDlp: ytDlp))
-                }
+            let result = await Background.run {
+                return FormatProbe.run(
+                    urlString: target,
+                    ytDlp: ytDlp,
+                    ffmpeg: ffmpeg,
+                    onStart: { process in
+                        DispatchQueue.main.async { self.probeProcess = process }
+                    }
+                )
+
+            }
+            probeProcess = nil
+
+            // Stopped on purpose: back to the "check" prompt rather than an
+            // error, and nothing is recorded as probed.
+            if case .failure(.cancelled) = result {
+                isProbing = false
+                return
             }
 
             // The URL field may have changed while the probe was running —
@@ -222,6 +241,7 @@ final class DownloadSession: ObservableObject {
     func start(ytDlp: URL?, ffmpeg: URL?, directory: OutputDirectory) {
         guard canDownload else { return }
         let trimmed = trimmedURL
+        statusDetails = nil
 
         guard WebURL.isValid(trimmed) else {
             status = String(localized: "That is not a valid URL.")
@@ -284,33 +304,31 @@ final class DownloadSession: ObservableObject {
         status = startStatus
 
         Task {
-            let outcome = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let result = DownloadRunner.run(
-                        urlString: trimmed,
-                        into: target,
-                        mode: mode,
-                        section: section,
-                        ytDlp: ytDlp,
-                        ffmpeg: ffmpeg,
-                        onStart: { process in
-                            DispatchQueue.main.async { self.runningProcess = process }
-                        }
-                    ) { progress in
-                        DispatchQueue.main.async {
-                            if let progress {
-                                if case .video(let profile, _) = mode {
-                                    self.status = String(localized: "Downloading (\(profile.name))… \(progress)", comment: "Profile name and percentage")
-                                } else {
-                                    self.status = String(localized: "Downloading… \(progress)", comment: "Audio-only download percentage")
-                                }
+            let outcome = await Background.run {
+                let result = DownloadRunner.run(
+                    urlString: trimmed,
+                    into: target,
+                    mode: mode,
+                    section: section,
+                    ytDlp: ytDlp,
+                    ffmpeg: ffmpeg,
+                    onStart: { process in
+                        DispatchQueue.main.async { self.runningProcess = process }
+                    }
+                ) { progress in
+                    DispatchQueue.main.async {
+                        if let progress {
+                            if case .video(let profile, _) = mode {
+                                self.status = String(localized: "Downloading (\(profile.name))… \(progress)", comment: "Profile name and percentage")
                             } else {
-                                self.status = String(localized: "Converting…", comment: "yt-dlp moved on to post-processing")
+                                self.status = String(localized: "Downloading… \(progress)", comment: "Audio-only download percentage")
                             }
+                        } else {
+                            self.status = String(localized: "Converting…", comment: "yt-dlp moved on to post-processing")
                         }
                     }
-                    continuation.resume(returning: result)
                 }
+                return result
             }
 
             isRunning = false
@@ -323,9 +341,10 @@ final class DownloadSession: ObservableObject {
                 // Stopping on purpose is not a failure, so it is not red.
                 status = String(localized: "Cancelled.")
                 statusKind = .idle
-            case .failed(let message):
+            case .failed(let message, let log):
                 status = message
                 statusKind = .failure
+                statusDetails = log
             }
         }
     }
@@ -404,7 +423,7 @@ struct DownloadView: View {
                         Toggle("Best available quality", isOn: $session.useBestQuality)
                             .onChange(of: session.useBestQuality) { newValue in
                                 if !newValue, session.probeIsStale, !session.isProbing, WebURL.isValid(session.trimmedURL) {
-                                    session.startProbe(ytDlp: tools.status(for: .ytDlp).url)
+                                    session.startProbe(ytDlp: tools.status(for: .ytDlp).url, ffmpeg: tools.status(for: .ffmpeg).url)
                                 }
                             }
 
@@ -424,10 +443,12 @@ struct DownloadView: View {
                         }
                         Button("Clear") { session.clear() }
                             .disabled(!canClear)
-                        StatusLine(text: session.status, kind: session.statusKind)
+                        StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
                     }
                 }
-                .disabled(!isReady)
+                // Never while something is running: a tool check that comes
+                // back empty mid-download must not take Cancel away with it.
+                .disabled(!isReady && !session.isRunning)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -462,7 +483,7 @@ struct DownloadView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
                 }
-                Button("Fetch duration") { session.fetchDuration(ytDlp: tools.status(for: .ytDlp).url) }
+                Button("Fetch duration") { session.fetchDuration(ytDlp: tools.status(for: .ytDlp).url, ffmpeg: tools.status(for: .ffmpeg).url) }
                     .disabled(!WebURL.isValid(session.trimmedURL) || session.isFetchingDuration)
             }
 
@@ -492,6 +513,9 @@ struct DownloadView: View {
                 Text("Checking available quality…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Cancel") { session.cancelProbe() }
+                    .buttonStyle(.link)
+                    .font(.caption)
             }
         } else if session.probeIsStale {
             if session.trimmedURL.isEmpty {
@@ -499,14 +523,14 @@ struct DownloadView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Button("Check available quality") { session.startProbe(ytDlp: tools.status(for: .ytDlp).url) }
+                Button("Check available quality") { session.startProbe(ytDlp: tools.status(for: .ytDlp).url, ffmpeg: tools.status(for: .ffmpeg).url) }
             }
         } else if let probeError = session.probeError {
             VStack(alignment: .leading, spacing: 4) {
                 Text(probeError)
                     .font(.caption)
                     .foregroundStyle(.red)
-                Button("Check again") { session.startProbe(ytDlp: tools.status(for: .ytDlp).url) }
+                Button("Check again") { session.startProbe(ytDlp: tools.status(for: .ytDlp).url, ffmpeg: tools.status(for: .ffmpeg).url) }
             }
         } else if let probeResult = session.probeResult {
             optionPicker(for: probeResult)

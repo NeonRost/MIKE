@@ -4,6 +4,351 @@
     "": {
       "shouldTranslate": false
     },
+    "%@ could not be started.": {
+      "comment": "Placeholder is a tool name such as ffmpeg",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ konnte nicht gestartet werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo iniciar %@."
+          }
+        }
+      }
+    },
+    "%@ exited with code %lld.": {
+      "comment": "First placeholder is a tool name such as ffmpeg",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ wurde mit Code %lld beendet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ terminó con el código %lld."
+          }
+        }
+      }
+    },
+    "A file with this name already exists.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Datei mit diesem Namen existiert bereits."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya existe un archivo con este nombre."
+          }
+        }
+      }
+    },
+    "A name cannot contain “/” or “:”.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Name darf weder „/“ noch „:“ enthalten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nombre no puede contener «/» ni «:»."
+          }
+        }
+      }
+    },
+    "A name starting with a dot would hide the file.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Name, der mit einem Punkt beginnt, würde die Datei ausblenden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nombre que empieza por un punto ocultaría el archivo."
+          }
+        }
+      }
+    },
+    "AI Generation Data": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "KI-Generierungsdaten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datos de generación por IA"
+          }
+        }
+      }
+    },
+    "Check the preview before continuing. The last rename can be undone while MIKE stays open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfe die Vorschau, bevor du fortfährst. Die letzte Umbenennung lässt sich widerrufen, solange MIKE geöffnet bleibt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revisa la vista previa antes de continuar. El último cambio de nombre se puede deshacer mientras MIKE siga abierto."
+          }
+        }
+      }
+    },
+    "Could not restore every name: %@": {
+      "comment": "Placeholder is a comma-separated list of file names",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht jeder Name konnte wiederhergestellt werden: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron restaurar todos los nombres: %@"
+          }
+        }
+      }
+    },
+    "Details": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Details"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detalles"
+          }
+        }
+      }
+    },
+    "Left out, could not be read: %@": {
+      "comment": "Placeholder is a comma-separated list of file names",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ausgelassen, nicht lesbar: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Omitidos, no se pudieron leer: %@"
+          }
+        }
+      }
+    },
+    "Listing files…": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dateien werden aufgelistet…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enumerando archivos…"
+          }
+        }
+      }
+    },
+    "PNG Text Chunks": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PNG-Textblöcke"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bloques de texto PNG"
+          }
+        }
+      }
+    },
+    "The name would be empty.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Name wäre leer."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El nombre quedaría vacío."
+          }
+        }
+      }
+    },
+    "The output folder could not be created.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Zielordner konnte nicht angelegt werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo crear la carpeta de destino."
+          }
+        }
+      }
+    },
+    "This is too large for TAR.GZ here — the limit is %@, because the whole archive has to fit in memory. ZIP has no such limit.": {
+      "comment": "Placeholder is a size such as 2 GB",
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das ist hier zu groß für TAR.GZ — die Grenze liegt bei %@, weil das gesamte Archiv in den Arbeitsspeicher passen muss. Für ZIP gilt keine solche Grenze."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esto es demasiado grande para TAR.GZ aquí: el límite es %@, porque todo el archivo tiene que caber en la memoria. ZIP no tiene ese límite."
+          }
+        }
+      }
+    },
+    "total number of tracks": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gesamtzahl der Tracks"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "número total de pistas"
+          }
+        }
+      }
+    },
+    "track number (01, 02, …)": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tracknummer (01, 02, …)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "número de pista (01, 02, …)"
+          }
+        }
+      }
+    },
+    "Undo Last Rename": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letzte Umbenennung widerrufen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deshacer el último cambio de nombre"
+          }
+        }
+      }
+    },
+    "Undoing…": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird widerrufen…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deshaciendo…"
+          }
+        }
+      }
+    },
+    "Undone. The files have their previous names again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerrufen. Die Dateien tragen wieder ihre vorherigen Namen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deshecho. Los archivos vuelven a tener sus nombres anteriores."
+          }
+        }
+      }
+    },
     "…or a direct link to the image": {
       "extractionState": "manual",
       "localizations": {
@@ -2309,41 +2654,6 @@
         }
       }
     },
-    "exiftool exited with code %lld.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "exiftool wurde mit Code %lld beendet."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "exiftool terminó con el código %lld."
-          }
-        }
-      }
-    },
-    "Exit %d": {
-      "comment": "yt-dlp ended with this exit code",
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Beendet mit %d"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Salida %d"
-          }
-        }
-      }
-    },
     "Extract": {
       "extractionState": "manual",
       "localizations": {
@@ -3334,23 +3644,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Patrón de nombre"
-          }
-        }
-      }
-    },
-    "Needs exiftool to remove metadata. Saving without removal still works.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zum Entfernen von Metadaten wird exiftool benötigt. Speichern ohne Entfernen funktioniert trotzdem."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Eliminar metadatos requiere exiftool. Guardar sin eliminarlos sigue funcionando."
           }
         }
       }
@@ -6365,23 +6658,6 @@
         }
       }
     },
-    "Cuts a clip out of a video without re-encoding, so there is no quality loss.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schneidet einen Ausschnitt aus einem Video, ohne neu zu kodieren — kein Qualitätsverlust."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recorta un fragmento de un vídeo sin recodificar, sin pérdida de calidad."
-          }
-        }
-      }
-    },
     "Trim points snap to keyframes — the result may be off by a fraction of a second.": {
       "extractionState": "manual",
       "localizations": {
@@ -7131,23 +7407,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Renombrar"
-          }
-        }
-      }
-    },
-    "Renaming cannot be undone. Check the preview before continuing.": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Umbenennen kann nicht rückgängig gemacht werden. Prüfe die Vorschau, bevor du fortfährst."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cambiar el nombre no se puede deshacer. Revisa la vista previa antes de continuar."
           }
         }
       }

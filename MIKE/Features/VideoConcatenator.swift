@@ -16,12 +16,17 @@
 
 import Foundation
 
-enum VideoConcatError: LocalizedError {
+enum VideoConcatError: LocalizedError, ToolLogCarrying {
     case noVideos
     case listUnwritable
-    case ffmpegFailed(String)
+    case ffmpegFailed(String, log: String)
     case incompatible([String])
     case cancelled
+
+    var toolLog: String? {
+        if case .ffmpegFailed(_, let log) = self, !log.isEmpty { return log }
+        return nil
+    }
 
     var errorDescription: String? {
         switch self {
@@ -30,7 +35,7 @@ enum VideoConcatError: LocalizedError {
         case .listUnwritable:
             return String(localized: "The file list could not be written.")
         // ffmpeg's own output, passed through untranslated.
-        case .ffmpegFailed(let detail): return "ffmpeg: \(detail)"
+        case .ffmpegFailed(let detail, _): return "ffmpeg: \(detail)"
         case .cancelled:
             return String(localized: "Cancelled.")
         case .incompatible(let reasons):
@@ -165,7 +170,7 @@ enum VideoConcatenator {
             executable: ffmpeg,
             arguments: ["-hide_banner", "-i", file.path],
             timeout: 15
-        ) else { return layout }
+        ), !result.timedOut, !result.cancelled else { return layout }
 
         for line in result.output.split(whereSeparator: \.isNewline) {
             let text = String(line)
@@ -279,9 +284,7 @@ enum VideoConcatenator {
             directory: directory, stem: outputStem, extension: outputExtension
         )
 
-        var lastLines: [String] = []
-        var launched: Process?
-        let status = ProcessRunner.stream(
+        let outcome = ProcessRunner.run(
             executable: ffmpeg,
             arguments: [
                 "-y",
@@ -291,23 +294,17 @@ enum VideoConcatenator {
                 "-c", "copy",
                 target.path,
             ],
-            onStart: { process in
-                launched = process
-                onStart?(process)
-            }
-        ) { line in
-            lastLines.append(line)
-            if lastLines.count > 20 { lastLines.removeFirst() }
-        }
+            onStart: onStart
+        )
 
-        guard status == 0 else {
-            if launched?.terminationReason == .uncaughtSignal {
-                // ffmpeg writes as it goes, so the half-built file has to go.
-                try? FileManager.default.removeItem(at: target)
-                throw VideoConcatError.cancelled
-            }
-            let detail = lastLines.last.map { String($0.prefix(140)) } ?? "exit \(status)"
-            throw VideoConcatError.ffmpegFailed(detail)
+        guard outcome.succeeded else {
+            // ffmpeg writes as it goes — and on a cancel even finishes the
+            // file properly before exiting — so whatever is there has to go.
+            try? FileManager.default.removeItem(at: target)
+            if outcome.cancelled { throw VideoConcatError.cancelled }
+            throw VideoConcatError.ffmpegFailed(
+                outcome.failureSummary(tool: "ffmpeg"), log: outcome.logText
+            )
         }
 
         return target

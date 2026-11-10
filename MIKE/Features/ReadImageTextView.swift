@@ -59,17 +59,11 @@ final class ReadImageTextSession: ObservableObject {
         status = String(localized: "Recognizing…")
 
         task = Task {
-            let outcome: Result<String, Error> = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        let image = try ImageConverter.load(from: data)
-                        let orientation = TextRecognizer.orientation(from: data)
-                        let text = try TextRecognizer.recognizeText(in: image, orientation: orientation)
-                        continuation.resume(returning: .success(text))
-                    } catch {
-                        continuation.resume(returning: .failure(error))
-                    }
-                }
+            let outcome: Result<String, Error> = await Background.attempt {
+                let image = try ImageConverter.loadUnrotated(from: data)
+                let orientation = TextRecognizer.orientation(from: data)
+                let text = try TextRecognizer.recognizeText(in: image, orientation: orientation)
+                return text
             }
 
             isRunning = false
@@ -108,17 +102,11 @@ final class ReadImageTextSession: ObservableObject {
                     comment: "Progress while reading text from a batch of images"
                 )
 
-                let outcome: Result<String, Error> = await withCheckedContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            let image = try ImageConverter.load(from: url)
-                            let orientation = TextRecognizer.orientation(from: url)
-                            let text = try TextRecognizer.recognizeText(in: image, orientation: orientation)
-                            continuation.resume(returning: .success(text))
-                        } catch {
-                            continuation.resume(returning: .failure(error))
-                        }
-                    }
+                let outcome: Result<String, Error> = await Background.attempt {
+                    let image = try ImageConverter.loadUnrotated(from: url)
+                    let orientation = TextRecognizer.orientation(from: url)
+                    let text = try TextRecognizer.recognizeText(in: image, orientation: orientation)
+                    return text
                 }
 
                 switch outcome {
@@ -336,31 +324,10 @@ struct ReadImageTextView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard !session.isRunning, !providers.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        // Collected on a lock, not `pickedFiles` directly: `loadItem`'s
-        // completion handlers arrive on an arbitrary queue, never the main
-        // actor.
-        let collected = Locked<[URL]>([])
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                let url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else {
-                    url = item as? URL
-                }
-                guard let url, TextRecognizer.acceptedExtensions.contains(url.pathExtension.lowercased())
-                else { return }
-                collected.withValue { $0.append(url) }
-            }
-        }
-
-        group.notify(queue: .main) {
-            for url in collected.value where !session.pickedFiles.contains(url) {
+        FileDrop.urls(from: providers) { urls in
+            for url in urls
+            where TextRecognizer.acceptedExtensions.contains(url.pathExtension.lowercased())
+                && !session.pickedFiles.contains(url) {
                 session.pickedFiles.append(url)
             }
         }
@@ -388,22 +355,5 @@ struct ReadImageTextView: View {
             }
             try data.write(to: url)
         }
-    }
-}
-
-/// Minimal mutable box guarded by a lock, for collecting drop results that
-/// arrive on an arbitrary queue before handing them to the main actor.
-private final class Locked<Value> {
-    private var storage: Value
-    private let lock = NSLock()
-
-    init(_ value: Value) { storage = value }
-
-    var value: Value { lock.lock(); defer { lock.unlock() }; return storage }
-
-    func withValue(_ body: (inout Value) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        body(&storage)
     }
 }

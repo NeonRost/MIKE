@@ -55,7 +55,14 @@ final class TrackSplitterSession: ObservableObject {
     @Published var currentTrackIndex = 0
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
+    /// 0…1 while the silence analysis decodes the file.
+    @Published var analysisProgress: Double = 0
     private var runningProcess: Process?
+    /// Set by Cancel and checked between steps. Stopping the process alone is
+    /// not enough here: a split is many short ffmpeg runs in a row, and a
+    /// click that lands between two of them would find nothing to stop.
+    private var cancelRequested = false
 
     var isBusy: Bool { isAnalyzing || isSplitting }
     var hasAnalyzed: Bool { analysis != nil }
@@ -98,6 +105,7 @@ final class TrackSplitterSession: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = AudioSplitter.acceptedExtensions.compactMap { UTType(filenameExtension: $0) }
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
         load(chosen, directory: directory)
@@ -132,6 +140,7 @@ final class TrackSplitterSession: ObservableObject {
         coverEdit = .unchanged
         status = ""
         statusKind = .idle
+        statusDetails = nil
     }
 
     func analyze(ffmpeg: URL?) {
@@ -140,37 +149,47 @@ final class TrackSplitterSession: ObservableObject {
         let minDur = minDuration
 
         isAnalyzing = true
+        cancelRequested = false
+        analysisProgress = 0
         status = String(localized: "Analyzing…")
         statusKind = .working
+        statusDetails = nil
 
         Task { [weak self] in
-            let result = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(
-                        returning: AudioSplitter.analyze(
-                            file: sourceFile, thresholdDB: threshold, minDuration: minDur, ffmpeg: ffmpeg
-                        )
-                    )
-                }
+            let result: Result<SilenceAnalysis, Error> = await Background.attempt {
+                let analysis = try AudioSplitter.analyze(
+                    file: sourceFile, thresholdDB: threshold, minDuration: minDur, ffmpeg: ffmpeg,
+                    onStart: { process in DispatchQueue.main.async { self?.runningProcess = process } },
+                    onProgress: { fraction in DispatchQueue.main.async { self?.analysisProgress = fraction } }
+                )
+                return analysis
             }
 
             guard let self else { return }
             isAnalyzing = false
-            guard let result else {
-                status = String(localized: "The file could not be analyzed.")
-                statusKind = .failure
-                return
-            }
+            runningProcess = nil
 
-            analysis = result
-            let ranges = AudioSplitter.trackRanges(duration: result.duration, silences: result.silences)
-            trackRanges = ranges
-            trackNames = AudioSplitter.defaultNames(trackCount: ranges.count)
-            trackStartTexts = ranges.map { VideoTrimmer.formatTimecode($0.start) }
-            trackEndTexts = ranges.map { VideoTrimmer.formatTimecode($0.end) }
-            patternText = ""
-            status = ""
-            statusKind = .idle
+            switch result {
+            case .failure(let error):
+                if error is CancellationError {
+                    status = String(localized: "Cancelled.")
+                    statusKind = .idle
+                } else {
+                    status = error.localizedDescription
+                    statusKind = .failure
+                    statusDetails = (error as? ToolLogCarrying)?.toolLog
+                }
+            case .success(let result):
+                analysis = result
+                let ranges = AudioSplitter.trackRanges(duration: result.duration, silences: result.silences)
+                trackRanges = ranges
+                trackNames = AudioSplitter.defaultNames(trackCount: ranges.count)
+                trackStartTexts = ranges.map { VideoTrimmer.formatTimecode($0.start) }
+                trackEndTexts = ranges.map { VideoTrimmer.formatTimecode($0.end) }
+                patternText = ""
+                status = ""
+                statusKind = .idle
+            }
         }
     }
 
@@ -203,13 +222,36 @@ final class TrackSplitterSession: ObservableObject {
         trackEndTexts[index] = VideoTrimmer.formatTimecode(trackRanges[index].end)
     }
 
+    /// Takes over every start/end field as it stands. The fields commit on
+    /// Return or on losing focus; pressing Split guarantees neither, so
+    /// without this a typed boundary could sit in its field while the cut ran
+    /// with the old one. Start and end of a track are resolved together, for
+    /// the same reason `TrimVideoSession.commitFields` does it.
+    func commitTrackFields() {
+        let fileDuration = analysis?.duration
+        for index in trackRanges.indices {
+            guard trackStartTexts.indices.contains(index), trackEndTexts.indices.contains(index) else { continue }
+            let parsedStart = VideoTrimmer.parseTimecode(trackStartTexts[index]) ?? trackRanges[index].start
+            let parsedEnd = VideoTrimmer.parseTimecode(trackEndTexts[index]) ?? trackRanges[index].end
+            let upper = fileDuration ?? max(parsedEnd, Self.minimumTrackLength)
+            let end = min(max(parsedEnd, Self.minimumTrackLength), upper)
+            let start = max(min(max(parsedStart, 0), end - Self.minimumTrackLength), 0)
+            trackRanges[index].start = start
+            trackRanges[index].end = end
+            trackStartTexts[index] = VideoTrimmer.formatTimecode(start)
+            trackEndTexts[index] = VideoTrimmer.formatTimecode(end)
+        }
+    }
+
     func cancel() {
-        guard let process = runningProcess, process.isRunning else { return }
+        guard isBusy else { return }
+        cancelRequested = true
         status = String(localized: "Cancelling…")
-        process.terminate()
+        if let process = runningProcess { ProcessRunner.cancel(process) }
     }
 
     func split(ffmpeg: URL?, directory: OutputDirectory) {
+        commitTrackFields()
         guard canSplit, let sourceFile, let ffmpeg else { return }
         let ranges = trackRanges
         let names = trackNames
@@ -225,8 +267,10 @@ final class TrackSplitterSession: ObservableObject {
         let comment = tagComment
 
         isSplitting = true
+        cancelRequested = false
         currentTrackIndex = 0
         statusKind = .working
+        statusDetails = nil
         status = String(localized: "Splitting…")
 
         Task { [weak self] in
@@ -236,27 +280,30 @@ final class TrackSplitterSession: ObservableObject {
             var tagFailures = 0
             for (index, range) in ranges.enumerated() {
                 guard let self else { return }
+                if cancelRequested {
+                    finishCancelled(completed: completed)
+                    return
+                }
                 currentTrackIndex = index + 1
-                let stem = names[index].trimmingCharacters(in: .whitespaces).isEmpty
-                    ? "track_\(index + 1)" : names[index]
+                let typed = names.indices.contains(index)
+                    ? names[index].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                let fallback = "track_\(index + 1)"
+                // The typed name stays the track's *title*; only the file name
+                // has to obey file-name rules. "AC/DC - Thunderstruck" used to
+                // be handed to ffmpeg as a path into a folder called "AC".
+                let title = typed.isEmpty ? fallback : typed
+                let stem = FileName.sanitizedStem(typed, fallback: fallback)
                 status = String(
                     localized: "Cutting \(currentTrackIndex) of \(ranges.count): \(stem)",
                     comment: "Progress while splitting a track out of the source file"
                 )
 
                 let destination = ImageConverter.uniqueURL(directory: target, stem: stem, extension: extension_)
-                let outcome: Result<Void, Error> = await withCheckedContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do {
-                            try AudioSplitter.cut(
-                                source: sourceFile, range: range, to: destination, ffmpeg: ffmpeg,
-                                onStart: { process in DispatchQueue.main.async { self.runningProcess = process } }
-                            )
-                            continuation.resume(returning: .success(()))
-                        } catch {
-                            continuation.resume(returning: .failure(error))
-                        }
-                    }
+                let outcome: Result<Void, Error> = await Background.attempt {
+                    try AudioSplitter.cut(
+                        source: sourceFile, range: range, to: destination, ffmpeg: ffmpeg,
+                        onStart: { process in DispatchQueue.main.async { self.runningProcess = process } }
+                    )
                 }
 
                 switch outcome {
@@ -266,9 +313,9 @@ final class TrackSplitterSession: ObservableObject {
                     // Tagging is secondary to the cut itself: a failure here
                     // is counted, not fatal — the track that was actually
                     // requested (the audio) already exists and is kept.
-                    if capabilities.supportsTags {
+                    if capabilities.supportsTags, !cancelRequested {
                         var tags = AudioTags()
-                        tags.title = stem
+                        tags.title = title
                         tags.track = "\(index + 1)/\(ranges.count)"
                         tags.artist = artist
                         tags.albumArtist = albumArtist
@@ -277,37 +324,38 @@ final class TrackSplitterSession: ObservableObject {
                         tags.genre = genre
                         tags.comment = comment
 
-                        let tagOutcome: Result<Void, Error> = await withCheckedContinuation { continuation in
-                            DispatchQueue.global(qos: .userInitiated).async {
-                                do {
-                                    try AudioTagEditor.write(tags: tags, cover: cover, to: destination, ffmpeg: ffmpeg)
-                                    continuation.resume(returning: .success(()))
-                                } catch {
-                                    continuation.resume(returning: .failure(error))
-                                }
-                            }
+                        let tagOutcome: Result<Void, Error> = await Background.attempt {
+                            try AudioTagEditor.write(
+                                tags: tags, cover: cover, to: destination, ffmpeg: ffmpeg,
+                                onStart: { process in DispatchQueue.main.async { self.runningProcess = process } }
+                            )
                         }
-                        if case .failure = tagOutcome {
+                        // A cancel that lands mid-tagging leaves the cut track
+                        // complete and merely untagged; the loop's own check
+                        // ends the run at the top of the next round.
+                        if case .failure(let error) = tagOutcome, !(error is CancellationError) {
                             tagFailures += 1
                         }
                     }
                 case .failure(let error):
-                    isSplitting = false
-                    runningProcess = nil
                     if error is CancellationError {
-                        status = String(
-                            localized: "Cancelled after \(completed) tracks. The finished ones are kept.",
-                            comment: "Placeholder is a count of tracks"
-                        )
-                        statusKind = .idle
+                        finishCancelled(completed: completed)
                     } else {
+                        isSplitting = false
+                        runningProcess = nil
                         status = error.localizedDescription
                         statusKind = .failure
+                        statusDetails = (error as? ToolLogCarrying)?.toolLog
                     }
                     return
                 }
             }
 
+            guard let self else { return }
+            if cancelRequested {
+                finishCancelled(completed: completed)
+                return
+            }
             isSplitting = false
             runningProcess = nil
             if tagFailures > 0 {
@@ -320,6 +368,17 @@ final class TrackSplitterSession: ObservableObject {
             }
             statusKind = .success
         }
+    }
+
+    private func finishCancelled(completed: Int) {
+        isSplitting = false
+        runningProcess = nil
+        status = String(
+            localized: "Cancelled after \(completed) tracks. The finished ones are kept.",
+            comment: "Placeholder is a count of tracks"
+        )
+        // Stopping on purpose is not a failure, so it is not red.
+        statusKind = .idle
     }
 }
 
@@ -373,7 +432,7 @@ struct TrackSplitterView: View {
                         }
                     }
                 }
-                .disabled(!isReady)
+                .disabled(!isReady && !session.isBusy)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -444,7 +503,15 @@ struct TrackSplitterView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(session.isBusy)
                 if session.isAnalyzing {
-                    ProgressView().controlSize(.small)
+                    Button("Cancel") { session.cancel() }
+                    ProgressView(value: session.analysisProgress)
+                        .frame(width: 140)
+                }
+                // The split row further down carries the status once there are
+                // tracks to split. Until then that row does not exist, and an
+                // analysis that failed used to fail without a word.
+                if session.trackRanges.isEmpty {
+                    StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
                 }
             }
         }
@@ -486,9 +553,19 @@ struct TrackSplitterView: View {
                     guard !newValue.isEmpty else { return }
                     session.trackNames = AudioSplitter.applyPattern(newValue, trackCount: session.trackRanges.count)
                 }
-            Text(verbatim: "%n   track number (01, 02, …)\n%t   total number of tracks")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
+            // The two placeholders are literal and go in verbatim; what they
+            // stand for is prose and is translated.
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 8) {
+                    Text(verbatim: "%n").font(.caption2.monospaced())
+                    Text("track number (01, 02, …)").font(.caption2)
+                }
+                HStack(spacing: 8) {
+                    Text(verbatim: "%t").font(.caption2.monospaced())
+                    Text("total number of tracks").font(.caption2)
+                }
+            }
+            .foregroundStyle(.secondary)
         }
         .disabled(session.isSplitting)
     }
@@ -526,10 +603,10 @@ struct TrackSplitterView: View {
     }
 
     @ViewBuilder
-    private func tagField(_ label: String, _ binding: Binding<String>, _ field: TagField) -> some View {
+    private func tagField(_ label: LocalizedStringKey, _ binding: Binding<String>, _ field: TagField) -> some View {
         let unsupported = session.tagCapabilities.unsupportedFields.contains(field)
         VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: label)
+            Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField(text: binding) { EmptyView() }
@@ -620,6 +697,7 @@ struct TrackSplitterView: View {
                         .font(.caption.monospacedDigit())
                         .frame(width: 100)
                         .onSubmit { session.applyTrackStartText(index) }
+                        .commitOnBlur { session.applyTrackStartText(index) }
 
                         Text(verbatim: "–")
                             .foregroundStyle(.secondary)
@@ -631,6 +709,7 @@ struct TrackSplitterView: View {
                         .font(.caption.monospacedDigit())
                         .frame(width: 100)
                         .onSubmit { session.applyTrackEndText(index) }
+                        .commitOnBlur { session.applyTrackEndText(index) }
                         Text(verbatim: ")")
                             .foregroundStyle(.secondary)
                     }
@@ -652,7 +731,7 @@ struct TrackSplitterView: View {
                 if session.isSplitting {
                     Button("Cancel") { session.cancel() }
                 }
-                StatusLine(text: session.status, kind: session.statusKind)
+                StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
             }
             if session.isSplitting {
                 ProgressView(value: Double(session.currentTrackIndex), total: Double(session.trackRanges.count))
@@ -664,17 +743,12 @@ struct TrackSplitterView: View {
     // MARK: - Drag & drop
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isBusy, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url, AudioSplitter.acceptedExtensions.contains(url.pathExtension.lowercased())
-            else { return }
-            DispatchQueue.main.async { session.load(url, directory: directory) }
+        guard !session.isBusy, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first(where: {
+                AudioSplitter.acceptedExtensions.contains($0.pathExtension.lowercased())
+            }) else { return }
+            session.load(url, directory: directory)
         }
         return true
     }

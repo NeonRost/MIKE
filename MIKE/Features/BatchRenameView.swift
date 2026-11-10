@@ -24,8 +24,17 @@ struct RenamePreviewRow: Identifiable {
     let id: URL
     let originalName: String
     let newName: String
+    /// Informational only — the EXIF step found no date for this file.
     let problem: String?
+    /// Two files of this batch would end up with the same name in the same
+    /// folder.
     var isConflict: Bool = false
+    /// Why this row cannot be renamed at all: the name is not a usable file
+    /// name, or a file that is not part of the batch already has it. Shown in
+    /// place of the generic conflict label, and blocks the rename like one.
+    var blocking: String?
+
+    var blocksRename: Bool { isConflict || blocking != nil }
 }
 
 /// Survives navigating away from and back to Batch Rename — see
@@ -62,7 +71,19 @@ final class BatchRenameSession: ObservableObject {
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
 
+    /// What the last rename did, newest state last, for undoing it.
+    @Published private(set) var lastRename: [(old: URL, new: URL)] = []
+
     private var dateInfoTask: Task<Void, Never>?
+
+    /// The preview for exactly the inputs it was built from. `previewRows` is
+    /// read several times per redraw — once by the list, again by `canRename`
+    /// — and building it means a pass over every file plus a look at the
+    /// disk, so it is kept until something it depends on changes.
+    private var previewCache: (files: [URL], settings: BatchRenameSettings, dataVersion: Int, rows: [RenamePreviewRow])?
+    /// Bumped whenever the date cache or the folder contents change under an
+    /// unchanged file list.
+    private var dataVersion = 0
 
     private var settings: BatchRenameSettings {
         var settings = BatchRenameSettings()
@@ -84,17 +105,52 @@ final class BatchRenameSession: ObservableObject {
         return settings
     }
 
-    /// Recomputed on every access — pure string manipulation over a small
-    /// list, cheap enough to stay live on every keystroke without a cache.
     var previewRows: [RenamePreviewRow] {
+        let currentSettings = settings
+        if let cache = previewCache, cache.dataVersion == dataVersion,
+           cache.settings == currentSettings, cache.files == files {
+            return cache.rows
+        }
+        let rows = buildPreviewRows(settings: currentSettings)
+        previewCache = (files, currentSettings, dataVersion, rows)
+        return rows
+    }
+
+    private func buildPreviewRows(settings: BatchRenameSettings) -> [RenamePreviewRow] {
         let planned = BatchRenamer.plan(files: files, dateInfo: dateInfo, settings: settings)
         var rows = planned.map {
             RenamePreviewRow(id: $0.source, originalName: $0.source.lastPathComponent, newName: $0.newName, problem: $0.problem)
         }
+
+        // Where each row would end up. Compared per folder and without regard
+        // to case: two files only collide if they land in the same folder,
+        // and on the default volume format `A.jpg` and `a.jpg` are one name.
+        let targets = rows.map { row in
+            BatchRenamer.key(for: row.id.deletingLastPathComponent().appendingPathComponent(row.newName))
+        }
         var counts: [String: Int] = [:]
-        for row in rows { counts[row.newName, default: 0] += 1 }
-        for index in rows.indices where (counts[rows[index].newName] ?? 0) > 1 {
-            rows[index].isConflict = true
+        for target in targets { counts[target, default: 0] += 1 }
+        let sources = Set(files.map { BatchRenamer.key(for: $0) })
+
+        for index in rows.indices {
+            let row = rows[index]
+            guard row.newName != row.originalName else { continue }
+
+            if let problem = FileName.problem(inStem: planned[index].newStem) {
+                rows[index].blocking = problem.message
+                continue
+            }
+            if (counts[targets[index]] ?? 0) > 1 {
+                rows[index].isConflict = true
+                continue
+            }
+            // Taken by a file that is not being renamed here. A file of this
+            // batch that currently holds the name is fine — it moves too, and
+            // `BatchRenamer.execute` orders that correctly.
+            let target = row.id.deletingLastPathComponent().appendingPathComponent(row.newName)
+            if !sources.contains(targets[index]), FileManager.default.fileExists(atPath: target.path) {
+                rows[index].blocking = String(localized: "A file with this name already exists.")
+            }
         }
         return rows
     }
@@ -102,7 +158,7 @@ final class BatchRenameSession: ObservableObject {
     var canRename: Bool {
         guard !isRenaming, !files.isEmpty, settings.hasAnyOperation else { return false }
         let rows = previewRows
-        guard !rows.contains(where: { $0.isConflict }) else { return false }
+        guard !rows.contains(where: { $0.blocksRename }) else { return false }
         return rows.contains { $0.newName != $0.originalName }
     }
 
@@ -132,6 +188,7 @@ final class BatchRenameSession: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 for (url, info) in results { self.dateInfo[url] = info }
+                self.dataVersion += 1
             }
         }
     }
@@ -141,6 +198,8 @@ final class BatchRenameSession: ObservableObject {
         dateInfoTask?.cancel()
         files = []
         dateInfo = [:]
+        lastRename = []
+        dataVersion += 1
         exifDateEnabled = false
         exifDateFormatText = "yyyy-MM-dd_HH-mm-ss"
         exifDateFallbackToModDate = true
@@ -183,6 +242,8 @@ final class BatchRenameSession: ObservableObject {
                         self.dateInfo[new] = info
                     }
                 }
+                self.lastRename = result.succeeded
+                self.dataVersion += 1
                 self.isRenaming = false
                 if result.failures.isEmpty {
                     self.status = String(
@@ -195,6 +256,49 @@ final class BatchRenameSession: ObservableObject {
                     self.status = String(
                         localized: "Done. \(result.succeeded.count) renamed, \(result.failures.count) failed: \(list)",
                         comment: "Placeholders: succeeded count, failed count, comma-separated file names"
+                    )
+                    self.statusKind = .failure
+                }
+            }
+        }
+    }
+
+    var canUndo: Bool { !isRenaming && !lastRename.isEmpty }
+
+    /// Puts the files of the last rename back under their old names. Goes
+    /// through the same executor, so a batch that swapped names is swapped
+    /// back correctly too.
+    func undoLastRename() {
+        guard canUndo else { return }
+        let pairs: [(source: URL, target: URL)] = lastRename.map { ($0.new, $0.old) }
+
+        isRenaming = true
+        statusKind = .working
+        status = String(localized: "Undoing…")
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = BatchRenamer.execute(pairs)
+            await MainActor.run {
+                guard let self else { return }
+                for (current, restored) in result.succeeded {
+                    if let index = self.files.firstIndex(of: current) {
+                        self.files[index] = restored
+                    }
+                    if let info = self.dateInfo.removeValue(forKey: current) {
+                        self.dateInfo[restored] = info
+                    }
+                }
+                self.lastRename = []
+                self.dataVersion += 1
+                self.isRenaming = false
+                if result.failures.isEmpty {
+                    self.status = String(localized: "Undone. The files have their previous names again.")
+                    self.statusKind = .success
+                } else {
+                    let list = ListFormatter.localizedString(byJoining: result.failures.map(\.name))
+                    self.status = String(
+                        localized: "Could not restore every name: \(list)",
+                        comment: "Placeholder is a comma-separated list of file names"
                     )
                     self.statusKind = .failure
                 }
@@ -353,7 +457,11 @@ struct BatchRenameView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 8)
-                    if row.isConflict {
+                    if let blocking = row.blocking {
+                        Text(verbatim: blocking)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    } else if row.isConflict {
                         Text("Name conflict")
                             .font(.caption2)
                             .foregroundStyle(.red)
@@ -364,7 +472,7 @@ struct BatchRenameView: View {
                     }
                 }
                 .foregroundStyle(
-                    row.isConflict ? Color.red
+                    row.blocksRename ? Color.red
                         : row.newName == row.originalName ? Color.secondary
                         : Color.primary
                 )
@@ -379,13 +487,15 @@ struct BatchRenameView: View {
     @ViewBuilder
     private var renameSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Renaming cannot be undone. Check the preview before continuing.")
+            Text("Check the preview before continuing. The last rename can be undone while MIKE stays open.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Button("Rename") { session.rename() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!session.canRename)
+                Button("Undo Last Rename") { session.undoLastRename() }
+                    .disabled(!session.canUndo)
                 Button("Clear") { session.clear() }
                     .disabled(!canClear)
                 StatusLine(text: session.status, kind: session.statusKind)
@@ -397,31 +507,9 @@ struct BatchRenameView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard !session.isRenaming, !providers.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        // Collected on a lock, not `files` directly: `loadItem`'s completion
-        // handlers arrive on an arbitrary queue, never the main actor.
-        let collected = BatchRenameDropCollector()
-
-        for provider in providers {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                let url: URL?
-                if let data = item as? Data {
-                    url = URL(dataRepresentation: data, relativeTo: nil)
-                } else {
-                    url = item as? URL
-                }
-                guard let url else { return }
-                collected.append(url)
-            }
-        }
-
-        group.notify(queue: .main) {
-            for url in collected.value {
-                var isDirectory: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+        FileDrop.urls(from: providers) { urls in
+            for url in urls {
+                if FileDrop.isDirectory(url) {
                     for expanded in FileListEditor.expand(folder: url, allowedExtensions: [], permitsAnyFile: true)
                     where !session.files.contains(expanded) {
                         session.files.append(expanded)
@@ -496,19 +584,5 @@ private struct OperationBlock<Content: View>: View {
         .disabled(isBusy)
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-/// Minimal mutable box guarded by a lock, for collecting drop results that
-/// arrive on an arbitrary queue before handing them to the main actor.
-private final class BatchRenameDropCollector {
-    private var storage: [URL] = []
-    private let lock = NSLock()
-
-    var value: [URL] { lock.lock(); defer { lock.unlock() }; return storage }
-
-    func append(_ url: URL) {
-        lock.lock(); defer { lock.unlock() }
-        storage.append(url)
     }
 }

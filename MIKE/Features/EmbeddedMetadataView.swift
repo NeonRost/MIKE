@@ -16,6 +16,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A working copy of one entry, holding the edit state before the batch write.
 struct EditRow: Identifiable {
@@ -62,41 +63,73 @@ final class EmbeddedMetadataSession: ObservableObject {
     @Published var hasReadEmpty = false
 
     @Published var isWorking = false
+    @Published var isLoading = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
     @Published var showBackupConfirm = false
+
+    /// Counts reads, so one for a file the user has since replaced is dropped.
+    private var loadGeneration = 0
 
     func chooseFile(exiftool: URL?) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        load(chosen, exiftool: exiftool)
+    }
+
+    func load(_ chosen: URL, exiftool: URL?) {
+        guard !isWorking else { return }
         sourceFile = chosen
+        groups = []
+        readResult = nil
+        hasReadEmpty = false
         status = ""
         statusKind = .idle
+        statusDetails = nil
         reload(exiftool: exiftool)
     }
 
     func clear() {
         guard !isWorking else { return }
+        loadGeneration += 1
+        isLoading = false
         sourceFile = nil
         groups = []
         readResult = nil
         hasReadEmpty = false
         status = ""
         statusKind = .idle
+        statusDetails = nil
         showBackupConfirm = false
     }
 
+    /// Reads off the main thread. `EmbeddedMetadata.read` runs exiftool and
+    /// waits for it — up to its 25-second timeout if the tool hangs — and it
+    /// used to do that right here on the main actor, with the whole window
+    /// frozen for as long as it took.
     func reload(exiftool: URL?) {
         guard let sourceFile else { return }
-        let result = EmbeddedMetadata.read(from: sourceFile, exiftool: exiftool)
-        readResult = result
-        groups = result.groups.map(Self.editGroup(from:))
-        // "Empty" ignores the always-present, possibly-empty PNG text group.
-        hasReadEmpty = result.groups.allSatisfy { $0.entries.isEmpty }
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoading = true
+
+        Task {
+            let result = await Background.run {
+                return EmbeddedMetadata.read(from: sourceFile, exiftool: exiftool)
+            }
+            guard generation == loadGeneration else { return }
+            isLoading = false
+            readResult = result
+            groups = result.groups.map(Self.editGroup(from:))
+            // "Empty" ignores the always-present, possibly-empty PNG text group.
+            hasReadEmpty = result.groups.allSatisfy { $0.entries.isEmpty }
+        }
     }
 
     private static func editGroup(from group: EmbeddedGroup) -> EditGroup {
@@ -160,16 +193,14 @@ final class EmbeddedMetadataSession: ObservableObject {
 
         isWorking = true
         statusKind = .working
+        statusDetails = nil
         status = String(localized: "Writing…")
 
         Task {
             do {
-                let result = try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        do { continuation.resume(returning: try EmbeddedMetadataWriter.write(ops, to: file, exiftool: exiftool)) }
-                        catch { continuation.resume(throwing: error) }
-                    }
-                }
+                let result = try await Background.attempt {
+                    return try EmbeddedMetadataWriter.write(ops, to: file, exiftool: exiftool)
+                }.get()
                 switch result {
                 case .updated(let backup):
                     status = backup == .created
@@ -184,6 +215,7 @@ final class EmbeddedMetadataSession: ObservableObject {
             } catch {
                 status = error.localizedDescription
                 statusKind = .failure
+                statusDetails = (error as? ToolLogCarrying)?.toolLog
             }
             isWorking = false
         }
@@ -221,12 +253,17 @@ struct EmbeddedMetadataView: View {
                         onChoose: { session.chooseFile(exiftool: exiftool) },
                         onClear: { session.clear() }
                     )
+                    .acceptsFileDrop(isEnabled: !session.isWorking) { urls in
+                        if let url = urls.first(where: FileDrop.isFile) { session.load(url, exiftool: exiftool) }
+                    }
                     Spacer(minLength: 0)
                     Button("Clear") { session.clear() }
                         .disabled(!canClear)
                 }
 
-                if session.sourceFile != nil {
+                if session.sourceFile != nil, session.isLoading, session.readResult == nil {
+                    ProgressView().controlSize(.small)
+                } else if session.sourceFile != nil {
                     notes
                     ForEach($session.groups) { $group in
                         GroupView(
@@ -313,13 +350,13 @@ struct EmbeddedMetadataView: View {
         HStack(spacing: 12) {
             Button("Write changes") { session.start(exiftool: exiftool) }
                 .buttonStyle(.borderedProminent)
-                .disabled(session.isWorking || !session.hasPendingChanges)
+                .disabled(session.isWorking || session.isLoading || !session.hasPendingChanges)
             if session.hasPendingChanges {
                 Text("\(session.pendingCount) pending")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            StatusLine(text: session.status, kind: session.statusKind)
+            StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
         }
     }
 

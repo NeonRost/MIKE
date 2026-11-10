@@ -48,6 +48,7 @@ struct FormatProbeResult: Sendable {
 enum FormatProbeError: LocalizedError {
     case toolFailed(String)
     case invalidResponse
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -55,6 +56,8 @@ enum FormatProbeError: LocalizedError {
             return detail
         case .invalidResponse:
             return String(localized: "yt-dlp did not return usable format information for this URL.")
+        case .cancelled:
+            return String(localized: "Cancelled.")
         }
     }
 }
@@ -67,24 +70,38 @@ enum FormatProbeError: LocalizedError {
 enum FormatProbe {
 
     /// Blocks until yt-dlp exits, so call it off the main thread.
-    static func run(urlString: String, ytDlp: URL) -> Result<FormatProbeResult, FormatProbeError> {
-        var lines: [String] = []
-        let status = ProcessRunner.stream(
+    ///
+    /// - Parameter onStart: handed the live process, so the caller can stop a
+    ///   probe that is taking too long — it has no timeout of its own, since
+    ///   how long a site takes to answer is not something MIKE can bound.
+    static func run(
+        urlString: String,
+        ytDlp: URL,
+        ffmpeg: URL?,
+        onStart: ((Process) -> Void)? = nil
+    ) -> Result<FormatProbeResult, FormatProbeError> {
+        // The JSON line is far longer than any log line worth keeping, so it
+        // is picked out as it streams past rather than fished out of the log.
+        var jsonLine: String?
+        let outcome = ProcessRunner.run(
             executable: ytDlp,
-            arguments: ["-j", "--no-warnings", "--no-playlist", "--", urlString]
+            arguments: ["-j", "--no-warnings", "--no-playlist", "--", urlString],
+            environment: DownloadRunner.environment(ytDlp: ytDlp, ffmpeg: ffmpeg),
+            onStart: onStart
         ) { line in
-            lines.append(line)
+            // yt-dlp prints exactly one JSON object per resolved video; with
+            // --no-playlist there is always exactly one such line, but other
+            // lines (warnings that slipped past --no-warnings, etc.) can
+            // precede it.
+            if jsonLine == nil, line.hasPrefix("{") { jsonLine = line }
         }
 
-        guard status == 0 else {
-            return .failure(.toolFailed(errorDetail(from: lines, status: status)))
+        if outcome.cancelled { return .failure(.cancelled) }
+        guard outcome.succeeded else {
+            return .failure(.toolFailed(outcome.failureSummary(tool: "yt-dlp")))
         }
 
-        // yt-dlp prints exactly one JSON object per resolved video; with
-        // --no-playlist there is always exactly one such line, but other
-        // lines (warnings that slipped past --no-warnings, etc.) can precede
-        // it.
-        guard let jsonLine = lines.first(where: { $0.hasPrefix("{") }),
+        guard let jsonLine,
               let data = jsonLine.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let formats = root["formats"] as? [[String: Any]]
@@ -134,17 +151,5 @@ enum FormatProbe {
     /// is always a whole number, `abr` almost never is).
     private static func number(_ value: Any?) -> NSNumber? {
         value as? NSNumber
-    }
-
-    private static func errorDetail(from lines: [String], status: Int32) -> String {
-        if let explicit = lines.last(where: {
-            $0.lowercased().hasPrefix("error") || $0.contains("ERROR:")
-        }) {
-            return String(explicit.prefix(200))
-        }
-        if let last = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            return String(last.prefix(200))
-        }
-        return String(localized: "Exit \(status)", comment: "yt-dlp ended with this exit code")
     }
 }

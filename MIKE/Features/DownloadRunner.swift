@@ -140,7 +140,8 @@ struct DownloadSection: Sendable {
 enum DownloadOutcome {
     case finished
     case cancelled
-    case failed(String)
+    /// The summary line, and the rest of what yt-dlp printed for Details.
+    case failed(String, log: String?)
 }
 
 enum DownloadRunner {
@@ -167,7 +168,7 @@ enum DownloadRunner {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
-            return .failed("The output folder could not be created.")
+            return .failed(String(localized: "The output folder could not be created."), log: nil)
         }
 
         let template = directory.appendingPathComponent("%(title)s.%(ext)s").path
@@ -176,6 +177,13 @@ enum DownloadRunner {
         // sitting in front of -f. --download-sections applies the same way to
         // either mode, so it is appended once after the mode-specific flags
         // rather than duplicated into both branches below.
+        //
+        // --no-playlist is the one addition to the original command line. A
+        // watch URL that also carries `&list=…` makes yt-dlp fetch the whole
+        // playlist by default, while the quality probe and the duration fetch
+        // have always asked about the single video — so the section promised
+        // one file and delivered dozens, with the progress stuck on
+        // "Converting…" after the first.
         var arguments: [String] = []
         if let ffmpeg {
             arguments += ["--ffmpeg-location", ffmpeg.path]
@@ -190,6 +198,7 @@ enum DownloadRunner {
                 "-o", template,
                 "--newline",
                 "--no-colors",
+                "--no-playlist",
             ]
         case .audio(let format, let bitrate):
             // A concrete bitrate (from a real probe) is passed as e.g. "128K" —
@@ -203,6 +212,7 @@ enum DownloadRunner {
                 "-o", template,
                 "--newline",
                 "--no-colors",
+                "--no-playlist",
             ]
         }
         if let section {
@@ -216,43 +226,24 @@ enum DownloadRunner {
             urlString,
         ]
 
-        var environment = ProcessInfo.processInfo.environment
-        // Progress parsing depends on a decimal point.
-        environment["LC_ALL"] = environment["LC_ALL"] ?? "en_US.UTF-8"
-        var searchPath = [ytDlp.deletingLastPathComponent().path]
-        if let ffmpeg {
-            searchPath.append(ffmpeg.deletingLastPathComponent().path)
-        }
-        if let existing = environment["PATH"] {
-            searchPath.append(existing)
-        }
-        environment["PATH"] = searchPath.joined(separator: ":")
+        let environment = environment(ytDlp: ytDlp, ffmpeg: ffmpeg)
 
-        var tail: [String] = []
         var inPostprocessing = false
         var lastPercent = ""
         // Every file yt-dlp says it is writing, so a cancelled run can clean up
         // exactly its own leftovers and nothing else in the folder.
         var destinations: [URL] = []
 
-        // Kept so the exit can be told apart afterwards: a process we asked to
-        // stop dies by signal, a failing one exits with a code.
-        var launched: Process?
-
-        let status = ProcessRunner.stream(
+        let outcome = ProcessRunner.run(
             executable: ytDlp,
             arguments: arguments,
             environment: environment,
-            onStart: { process in
-                launched = process
-                onStart?(process)
-            }
+            logLimit: 80,
+            onStart: onStart
         ) { line in
-            tail.append(line)
             if let destination = destination(in: line) {
                 destinations.append(destination)
             }
-            if tail.count > 30 { tail.removeFirst() }
 
             if !inPostprocessing,
                postprocessMarkers.contains(where: { line.contains($0) })
@@ -274,14 +265,34 @@ enum DownloadRunner {
             }
         }
 
-        guard status == 0 else {
-            if launched?.terminationReason == .uncaughtSignal {
-                removePartialFiles(for: destinations)
-                return .cancelled
-            }
-            return .failed(errorMessage(from: tail, status: status))
+        if outcome.cancelled {
+            removePartialFiles(for: destinations)
+            return .cancelled
+        }
+        guard outcome.succeeded else {
+            return .failed(outcome.failureSummary(tool: "yt-dlp"), log: outcome.logText)
         }
         return .finished
+    }
+
+    /// The environment every yt-dlp call runs in — the download, the quality
+    /// probe and the duration fetch alike. They used to differ: only the
+    /// download got the widened `PATH`, so the probe ran without ffmpeg (and
+    /// without whatever JavaScript runtime sits next to yt-dlp) in reach and
+    /// could report a different set of formats than the download then found.
+    static func environment(ytDlp: URL, ffmpeg: URL?) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        // Progress parsing depends on a decimal point.
+        environment["LC_ALL"] = environment["LC_ALL"] ?? "en_US.UTF-8"
+        var searchPath = [ytDlp.deletingLastPathComponent().path]
+        if let ffmpeg {
+            searchPath.append(ffmpeg.deletingLastPathComponent().path)
+        }
+        if let existing = environment["PATH"] {
+            searchPath.append(existing)
+        }
+        environment["PATH"] = searchPath.joined(separator: ":")
+        return environment
     }
 
     /// yt-dlp announces each file as `[download] Destination: /path/to/file`.
@@ -331,11 +342,12 @@ enum DownloadRunner {
     /// correctly. Scanning line by line for the first parseable number
     /// — the same shape of fix `FormatProbe` already needed for its own
     /// JSON line — finds it regardless of what else got printed around it.
-    static func fetchDuration(urlString: String, ytDlp: URL) -> TimeInterval? {
+    static func fetchDuration(urlString: String, ytDlp: URL, ffmpeg: URL?) -> TimeInterval? {
         guard let result = ProcessRunner.capture(
             executable: ytDlp,
             arguments: ["--print", "duration", "--no-warnings", "--no-playlist", "--", urlString],
-            timeout: 20
+            environment: environment(ytDlp: ytDlp, ffmpeg: ffmpeg),
+            timeout: 30
         ), result.status == 0 else { return nil }
         for line in result.output.split(whereSeparator: \.isNewline) {
             if let value = Double(line.trimmingCharacters(in: .whitespaces)) {
@@ -356,17 +368,5 @@ enum DownloadRunner {
             options: .regularExpression
         ) else { return nil }
         return String(line[range])
-    }
-
-    private static func errorMessage(from tail: [String], status: Int32) -> String {
-        if let explicit = tail.last(where: {
-            $0.lowercased().hasPrefix("error") || $0.contains("ERROR:")
-        }) {
-            return String(explicit.prefix(140))
-        }
-        if let last = tail.last {
-            return String(last.prefix(140))
-        }
-        return String(localized: "Exit \(status)", comment: "yt-dlp ended with this exit code")
     }
 }

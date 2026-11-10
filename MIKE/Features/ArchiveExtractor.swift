@@ -39,13 +39,24 @@ enum ArchiveExtractor {
         onProgress: @escaping (Int, Int) -> Void,
         isCancelled: @escaping () -> Bool
     ) throws -> ArchiveExtractionResult {
-        switch format {
-        case .zip:
-            let (count, failed) = try extractZip(archive: archive, to: destination, onProgress: onProgress, isCancelled: isCancelled)
-            return ArchiveExtractionResult(destination: destination, extractedCount: count, failed: failed)
-        case .tarGz:
-            let (count, failed) = try extractTarGz(archive: archive, to: destination, onProgress: onProgress, isCancelled: isCancelled)
-            return ArchiveExtractionResult(destination: destination, extractedCount: count, failed: failed)
+        // Only a folder this run created is this run's to remove again.
+        let existedBefore = FileManager.default.fileExists(atPath: destination.path)
+        do {
+            switch format {
+            case .zip:
+                let (count, failed) = try extractZip(archive: archive, to: destination, onProgress: onProgress, isCancelled: isCancelled)
+                return ArchiveExtractionResult(destination: destination, extractedCount: count, failed: failed)
+            case .tarGz:
+                let (count, failed) = try extractTarGz(archive: archive, to: destination, onProgress: onProgress, isCancelled: isCancelled)
+                return ArchiveExtractionResult(destination: destination, extractedCount: count, failed: failed)
+            }
+        } catch {
+            // A cancelled or broken-off unpack used to leave its half-filled
+            // folder behind, looking like a finished result.
+            if !existedBefore {
+                try? FileManager.default.removeItem(at: destination)
+            }
+            throw error
         }
     }
 
@@ -57,12 +68,12 @@ enum ArchiveExtractor {
         onProgress: @escaping (Int, Int) -> Void,
         isCancelled: @escaping () -> Bool
     ) throws -> (count: Int, failed: [String]) {
-        guard let raw = try? Data(contentsOf: archive) else {
+        guard FileManager.default.isReadableFile(atPath: archive.path) else {
             throw CompressionError.corrupted(.zip)
         }
         // Checked before ZIPFoundation ever touches the file — see
         // `ZipEncryptionScan` for why this cannot be detected afterward.
-        if ZipEncryptionScan.containsEncryptedEntry(in: raw) {
+        if ZipEncryptionScan.containsEncryptedEntry(at: archive) {
             throw CompressionError.passwordProtected
         }
 
@@ -119,7 +130,11 @@ enum ArchiveExtractor {
         onProgress: @escaping (Int, Int) -> Void,
         isCancelled: @escaping () -> Bool
     ) throws -> (count: Int, failed: [String]) {
-        guard let compressed = try? Data(contentsOf: archive) else {
+        let archiveSize = Int64((try? archive.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        guard archiveSize <= TarGzLimits.maximumArchiveSize else {
+            throw CompressionError.tooLargeForTarGz(limit: TarGzLimits.describe(TarGzLimits.maximumArchiveSize))
+        }
+        guard let compressed = try? Data(contentsOf: archive, options: .mappedIfSafe) else {
             throw CompressionError.corrupted(.tarGz)
         }
 
@@ -163,6 +178,7 @@ enum ArchiveExtractor {
                         withIntermediateDirectories: true
                     )
                     try (entry.data ?? Data()).write(to: outputURL)
+                    applyAttributes(of: entry.info, to: outputURL)
                     extracted += 1
                 default:
                     // Symlinks, hard links, devices — not meaningfully or
@@ -176,5 +192,25 @@ enum ArchiveExtractor {
         }
         onProgress(entries.count, entries.count)
         return (extracted, failed)
+    }
+
+    /// Carries a TAR entry's mode and modification date over to the file just
+    /// written. Without the mode, a script or an app inside the archive comes
+    /// out no longer executable. Only the permission bits are applied — never
+    /// setuid/setgid/sticky from an archive someone else made — and a mode
+    /// that would lock the owner out of their own file is left at the default.
+    private static func applyAttributes(of info: TarEntryInfo, to url: URL) {
+        var attributes: [FileAttributeKey: Any] = [:]
+        if let permissions = info.permissions {
+            let mode = Int(permissions.rawValue & 0o777)
+            if mode & 0o400 != 0 {
+                attributes[.posixPermissions] = mode
+            }
+        }
+        if let modified = info.modificationTime, modified.timeIntervalSince1970 > 0 {
+            attributes[.modificationDate] = modified
+        }
+        guard !attributes.isEmpty else { return }
+        try? FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
     }
 }

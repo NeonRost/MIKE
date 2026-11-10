@@ -159,14 +159,14 @@ enum EmbeddedMetadata {
 
             if !aiEntries.isEmpty {
                 result.groups.append(EmbeddedGroup(
-                    title: "AI Generation Data", kind: .aiGeneration,
+                    title: String(localized: "AI Generation Data"), kind: .aiGeneration,
                     entries: aiEntries, allowsAdditions: false
                 ))
             }
             // Always present, even empty, so the user can add a text chunk to a
             // PNG that has none.
             result.groups.append(EmbeddedGroup(
-                title: "PNG Text Chunks", kind: .pngText,
+                title: String(localized: "PNG Text Chunks"), kind: .pngText,
                 entries: textEntries, allowsAdditions: true
             ))
 

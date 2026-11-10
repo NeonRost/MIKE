@@ -35,16 +35,30 @@ enum EPUBBuilder {
     /// Everything an EPUB reader needs to find, in the order a reader expects
     /// to find it. `mimetype` has to come first and stored uncompressed —
     /// that is what lets a reader identify the file from its first bytes.
-    static func build(files: [URL], into directory: URL, title: String) throws -> URL {
+    ///
+    /// - Returns: the book, and the names of the files left out because they
+    ///   could not be read as an image.
+    static func build(
+        files: [URL],
+        into directory: URL,
+        title: String,
+        isCancelled: () -> Bool = { false }
+    ) throws -> (url: URL, skipped: [String]) {
         guard !files.isEmpty else { throw ImageStackerError.noImages }
 
         // Unreadable files are skipped rather than failing the run, as in the
         // image and PDF paths. Only the dimensions are read here; the pixels
         // are never decoded, because the file is copied in as it is.
-        let pages: [Page] = files.enumerated().compactMap { index, url in
-            guard let size = pixelSize(of: url),
-                  let media = mediaType(for: url) else { return nil }
-            return Page(source: url, index: index, size: size, mediaType: media)
+        var pages: [Page] = []
+        var skipped: [String] = []
+        for url in files {
+            guard let size = pixelSize(of: url), let media = mediaType(for: url) else {
+                skipped.append(url.lastPathComponent)
+                continue
+            }
+            // Numbered by position in the book, not in the input, so a
+            // skipped file leaves no gap in the page names.
+            pages.append(Page(source: url, index: pages.count, size: size, mediaType: media))
         }
         guard !pages.isEmpty else { throw ImageStackerError.noImages }
 
@@ -70,6 +84,7 @@ enum EPUBBuilder {
             try add("EPUB/nav.xhtml", navXHTML(pages: pages, title: title), to: archive)
 
             for page in pages {
+                if isCancelled() { throw ImageStackerError.cancelled }
                 try add("EPUB/xhtml/\(page.documentName)", pageXHTML(page), to: archive)
                 // Already-compressed pixels: deflating them again buys
                 // nothing and costs time on every page.
@@ -79,12 +94,15 @@ enum EPUBBuilder {
                     compressionMethod: .none
                 )
             }
+        } catch ImageStackerError.cancelled {
+            try? FileManager.default.removeItem(at: target)
+            throw ImageStackerError.cancelled
         } catch {
             try? FileManager.default.removeItem(at: target)
             throw ImageStackerError.cannotWrite
         }
 
-        return target
+        return (target, skipped)
     }
 
     // MARK: - Text
@@ -216,11 +234,15 @@ enum EPUBBuilder {
     private static func pixelSize(of url: URL) -> (width: Int, height: Int)? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
               width > 0, height > 0
         else { return nil }
-        return (width, height)
+        // The file goes into the book untouched, orientation tag included, and
+        // the reader turns it when drawing. Orientations 5–8 are the quarter
+        // turns, so the page that holds it has to be the other way round.
+        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        return (5...8).contains(orientation) ? (height, width) : (width, height)
     }
 
     private static func mediaType(for url: URL) -> String? {

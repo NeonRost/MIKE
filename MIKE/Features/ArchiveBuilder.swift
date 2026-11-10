@@ -41,11 +41,19 @@ enum ArchiveBuilder {
         let entries = expand(items)
         guard !entries.isEmpty else { return }
 
-        switch format {
-        case .zip:
-            try createZip(entries: entries, to: destinationArchive, onProgress: onProgress, isCancelled: isCancelled)
-        case .tarGz:
-            try createTarGz(entries: entries, to: destinationArchive, onProgress: onProgress, isCancelled: isCancelled)
+        do {
+            switch format {
+            case .zip:
+                try createZip(entries: entries, to: destinationArchive, onProgress: onProgress, isCancelled: isCancelled)
+            case .tarGz:
+                try createTarGz(entries: entries, to: destinationArchive, onProgress: onProgress, isCancelled: isCancelled)
+            }
+        } catch {
+            // A ZIP grows entry by entry, so a cancelled or failed run would
+            // otherwise leave a shorter archive behind under the final name —
+            // one that opens fine and is simply missing files.
+            try? FileManager.default.removeItem(at: destinationArchive)
+            throw error
         }
     }
 
@@ -90,6 +98,15 @@ enum ArchiveBuilder {
         onProgress: @escaping (Int, Int) -> Void,
         isCancelled: @escaping () -> Bool
     ) throws {
+        // Refused before anything is read: see `TarGzLimits`.
+        var totalSize: Int64 = 0
+        for entry in entries where !entry.isDirectory {
+            totalSize += Int64((try? entry.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        guard totalSize <= TarGzLimits.maximumPackedInput else {
+            throw CompressionError.tooLargeForTarGz(limit: TarGzLimits.describe(TarGzLimits.maximumPackedInput))
+        }
+
         var tarEntries: [TarEntry] = []
         tarEntries.reserveCapacity(entries.count)
 
@@ -103,7 +120,8 @@ enum ArchiveBuilder {
             ArchiveProgress.report(current: index + 1, total: entries.count, lastPercent: &lastPercent, onProgress: onProgress)
 
             if entry.isDirectory {
-                let info = TarEntryInfo(name: entry.relativePath + "/", type: .directory)
+                var info = TarEntryInfo(name: entry.relativePath + "/", type: .directory)
+                applyAttributes(of: entry.url, to: &info, fallbackMode: 0o755)
                 tarEntries.append(TarEntry(info: info, data: nil))
             } else {
                 let data: Data
@@ -112,7 +130,8 @@ enum ArchiveBuilder {
                 } catch {
                     throw CompressionError.io(error.localizedDescription)
                 }
-                let info = TarEntryInfo(name: entry.relativePath, type: .regular)
+                var info = TarEntryInfo(name: entry.relativePath, type: .regular)
+                applyAttributes(of: entry.url, to: &info, fallbackMode: 0o644)
                 tarEntries.append(TarEntry(info: info, data: data))
             }
         }
@@ -136,11 +155,29 @@ enum ArchiveBuilder {
         }
     }
 
+    /// Gives a TAR entry the mode and modification date of the file it came
+    /// from. `TarEntryInfo` starts out with neither, and what that writes is
+    /// mode 000 dated 1970 — verified: an archive made that way unpacks with
+    /// `tar` into a folder its own owner gets "Permission denied" on.
+    private static func applyAttributes(of url: URL, to info: inout TarEntryInfo, fallbackMode: UInt32) {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let mode = (attributes?[.posixPermissions] as? NSNumber)?.uint32Value ?? fallbackMode
+        // Whatever the source says, the owner can always read the copy (and
+        // enter it, for a folder) — an archive nobody can open helps no one.
+        let ownerMinimum: UInt32 = fallbackMode & 0o700 == 0o700 ? 0o700 : 0o400
+        info.permissions = Permissions(rawValue: (mode & 0o777) | ownerMinimum)
+        info.modificationTime = (attributes?[.modificationDate] as? Date) ?? Date()
+    }
+
     // MARK: - Expansion
 
     /// Walks each top-level item (recursing into folders) into a flat list
-    /// of archive-relative paths. Hidden files are skipped, matching
-    /// `DuplicateFinder.collectFiles`'s own rule for folder scans.
+    /// of archive-relative paths.
+    ///
+    /// Hidden files are included. They used to be skipped, on the model of
+    /// the duplicate scan — but an archive is a copy, and one that quietly
+    /// leaves out `.env`, `.gitignore` or `.htaccess` is not the folder that
+    /// was handed over. Only the Finder's own `.DS_Store` litter stays out.
     private static func expand(_ items: [URL]) -> [Entry] {
         var result: [Entry] = []
         for item in items {
@@ -154,10 +191,11 @@ enum ArchiveBuilder {
                 guard let enumerator = FileManager.default.enumerator(
                     at: item,
                     includingPropertiesForKeys: keys,
-                    options: [.skipsHiddenFiles]
+                    options: []
                 ) else { continue }
 
                 for case let url as URL in enumerator {
+                    if url.lastPathComponent == ".DS_Store" { continue }
                     let subIsDir = (try? url.resourceValues(forKeys: Set(keys)))?.isDirectory ?? false
                     let relative = topName + "/" + relativeSubpath(of: url, under: item)
                     result.append(Entry(relativePath: relative, url: url, isDirectory: subIsDir))

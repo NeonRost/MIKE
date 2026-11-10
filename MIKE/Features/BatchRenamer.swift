@@ -52,7 +52,7 @@ enum SpaceReplacement: String, CaseIterable, Identifiable {
 /// Every operation's current settings, snapshotted once per preview/rename
 /// pass so the pure `plan(files:dateInfo:settings:)` function never touches
 /// `@Published` state directly.
-struct BatchRenameSettings {
+struct BatchRenameSettings: Equatable {
     var exifDateEnabled = false
     var exifDateFormat = "yyyy-MM-dd_HH-mm-ss"
     var exifDateFallbackToModDate = true
@@ -107,16 +107,25 @@ enum BatchRenamer {
     /// each file's name stem. The extension is never touched here — it is
     /// reattached by `PlannedRename.newName`.
     static func plan(files: [URL], dateInfo: [URL: FileDateInfo], settings: BatchRenameSettings) -> [PlannedRename] {
-        files.map { url in
+        // One formatter for the whole pass. A `DateFormatter` is expensive to
+        // set up, and this runs for every file on every keystroke.
+        let formatter = DateFormatter()
+        // EXIF/formatting dates always render in a fixed, unambiguous locale —
+        // the same reasoning as `MetadataWriter`'s own date formatter — since
+        // a file name should not silently change shape with the system locale.
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = settings.exifDateFormat
+
+        return files.map { url in
             var stem = url.deletingPathExtension().lastPathComponent
             var problem: String?
 
             if settings.exifDateEnabled {
                 let info = dateInfo[url]
                 if let capture = info?.captureDate {
-                    stem = format(capture, pattern: settings.exifDateFormat)
+                    stem = formatter.string(from: capture)
                 } else if settings.exifDateFallbackToModDate, let modified = info?.modificationDate {
-                    stem = format(modified, pattern: settings.exifDateFormat)
+                    stem = formatter.string(from: modified)
                 } else {
                     problem = String(localized: "No EXIF date found; name unchanged by this step.")
                 }
@@ -158,24 +167,55 @@ enum BatchRenamer {
         }
     }
 
-    /// EXIF/formatting dates always render in a fixed, unambiguous locale —
-    /// the same reasoning as `MetadataWriter`'s own date formatter — since a
-    /// file name should not silently change shape with the system locale.
-    private static func format(_ date: Date, pattern: String) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = pattern
-        return formatter.string(from: date)
-    }
-
     /// Renames are attempted one at a time; a failure does not stop the rest
     /// — "as atomic as possible" means the whole plan is validated and built
     /// up front (by the caller, from a conflict-free preview), not that a
     /// single failure rolls everything back.
+    ///
+    /// A rename whose target is still occupied by another file *of the same
+    /// batch* — `a → b` while `b → c`, a swap, or a change of case alone on a
+    /// case-insensitive volume — cannot simply be done in list order: the
+    /// name is taken until its current owner has moved. Those go through a
+    /// temporary name first; everything else is moved directly.
     static func execute(_ renames: [(source: URL, target: URL)]) -> (succeeded: [(old: URL, new: URL)], failures: [(name: String, error: String)]) {
         var succeeded: [(URL, URL)] = []
         var failures: [(String, String)] = []
-        for pair in renames {
+
+        let sourceKeys = Set(renames.map { key(for: $0.source) })
+        var parked: [(original: URL, temporary: URL, target: URL)] = []
+
+        for pair in renames where sourceKeys.contains(key(for: pair.target)) {
+            let temporary = pair.source.deletingLastPathComponent()
+                .appendingPathComponent(".mike-rename-\(UUID().uuidString)")
+            do {
+                try FileManager.default.moveItem(at: pair.source, to: temporary)
+                parked.append((pair.source, temporary, pair.target))
+            } catch {
+                failures.append((pair.source.lastPathComponent, error.localizedDescription))
+            }
+        }
+
+        for item in parked {
+            do {
+                try FileManager.default.moveItem(at: item.temporary, to: item.target)
+                succeeded.append((item.original, item.target))
+            } catch {
+                // Back under its own name rather than left under a hidden one.
+                try? FileManager.default.moveItem(at: item.temporary, to: item.original)
+                failures.append((item.original.lastPathComponent, error.localizedDescription))
+            }
+        }
+
+        let parkedKeys = Set(parked.map { key(for: $0.original) })
+        let alreadyFailed = Set(failures.map(\.0))
+        for pair in renames where !parkedKeys.contains(key(for: pair.source)) {
+            guard !sourceKeys.contains(key(for: pair.target)) else {
+                // Could not be parked above; already reported.
+                if !alreadyFailed.contains(pair.source.lastPathComponent) {
+                    failures.append((pair.source.lastPathComponent, ""))
+                }
+                continue
+            }
             do {
                 try FileManager.default.moveItem(at: pair.source, to: pair.target)
                 succeeded.append((pair.source, pair.target))
@@ -184,5 +224,16 @@ enum BatchRenamer {
             }
         }
         return (succeeded, failures)
+    }
+
+    /// Two paths that name the same file on the default, case-insensitive
+    /// volume format compare equal here.
+    ///
+    /// Purely textual on purpose. `standardizedFileURL` looks at the disk —
+    /// it drops a leading `/private` only while the file exists — so the key
+    /// of one and the same path changed the moment its file was moved away,
+    /// and a swap of two names stopped being recognised halfway through.
+    static func key(for url: URL) -> String {
+        url.path.lowercased()
     }
 }

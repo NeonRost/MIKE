@@ -17,17 +17,22 @@
 import CoreGraphics
 import Foundation
 
-enum VideoTrimError: LocalizedError {
+enum VideoTrimError: LocalizedError, ToolLogCarrying {
     case cannotReadDuration
-    case ffmpegFailed(String)
+    case ffmpegFailed(String, log: String)
     case cancelled
+
+    var toolLog: String? {
+        if case .ffmpegFailed(_, let log) = self, !log.isEmpty { return log }
+        return nil
+    }
 
     var errorDescription: String? {
         switch self {
         case .cannotReadDuration:
             return String(localized: "The video's duration could not be read.")
         // ffmpeg's own output, passed through untranslated.
-        case .ffmpegFailed(let detail): return "ffmpeg: \(detail)"
+        case .ffmpegFailed(let detail, _): return "ffmpeg: \(detail)"
         case .cancelled:
             return String(localized: "Cancelled.")
         }
@@ -50,7 +55,7 @@ enum VideoTrimmer {
             executable: ffmpeg,
             arguments: ["-hide_banner", "-i", file.path],
             timeout: 15
-        ) else { return nil }
+        ), !result.timedOut, !result.cancelled else { return nil }
 
         for line in result.output.split(whereSeparator: \.isNewline) {
             guard let range = line.range(of: "Duration: ") else { continue }
@@ -101,19 +106,34 @@ enum VideoTrimmer {
         arguments += ["-i", input.path, "-frames:v", "1", tempURL.path]
 
         let result = ProcessRunner.capture(executable: ffmpeg, arguments: arguments, timeout: 15)
-        guard result?.status == 0, FileManager.default.fileExists(atPath: tempURL.path) else { return nil }
+        guard result?.status == 0, FileManager.default.fileExists(atPath: tempURL.path) else {
+            // A timed-out or failed run can still have left a partial frame.
+            try? FileManager.default.removeItem(at: tempURL)
+            return nil
+        }
         return tempURL
     }
 
     /// Parses ffmpeg-style "HH:MM:SS.ss" into seconds.
+    ///
+    /// Each part has to be a plain non-negative number. `Double("nan")` and
+    /// `Double("inf")` both parse, and so does a minus sign — none of which is
+    /// a time, and a NaN that gets through compares false against every bound
+    /// that is supposed to clamp it.
     static func parseTimecode(_ text: String) -> TimeInterval? {
-        let parts = text.split(separator: ":")
-        guard parts.count == 3,
-              let hours = Double(parts[0]),
-              let minutes = Double(parts[1]),
-              let seconds = Double(parts[2])
-        else { return nil }
-        return hours * 3600 + minutes * 60 + seconds
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var values: [Double] = []
+        for part in parts {
+            guard !part.isEmpty,
+                  part.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }),
+                  let value = Double(part), value.isFinite
+            else { return nil }
+            values.append(value)
+        }
+        let total = values[0] * 3600 + values[1] * 60 + values[2]
+        // Keeps `formatTimecode`'s integer arithmetic far away from overflow.
+        return total < 1_000_000 ? total : nil
     }
 
     /// "HH:MM:SS.s" — one decimal digit, the precision shown in the Start/End
@@ -159,9 +179,7 @@ enum VideoTrimmer {
         )
         let clipLength = max(end - start, 0.001)
 
-        var lastLines: [String] = []
-        var launched: Process?
-        let status = ProcessRunner.stream(
+        let outcome = ProcessRunner.run(
             executable: ffmpeg,
             arguments: [
                 "-y",
@@ -171,26 +189,21 @@ enum VideoTrimmer {
             ] + cropArguments(for: cropRect) + [
                 target.path,
             ],
-            onStart: { process in
-                launched = process
-                onStart?(process)
-            }
+            onStart: onStart
         ) { line in
-            lastLines.append(line)
-            if lastLines.count > 20 { lastLines.removeFirst() }
             if let time = progressTime(in: line) {
                 onProgress(min(time / clipLength, 1))
             }
         }
 
-        guard status == 0 else {
-            if launched?.terminationReason == .uncaughtSignal {
-                // ffmpeg writes as it goes, so the half-built file has to go.
-                try? FileManager.default.removeItem(at: target)
-                throw VideoTrimError.cancelled
-            }
-            let detail = lastLines.last.map { String($0.prefix(140)) } ?? "exit \(status)"
-            throw VideoTrimError.ffmpegFailed(detail)
+        guard outcome.succeeded else {
+            // ffmpeg writes as it goes — and on a cancel even finishes the
+            // file properly before exiting — so whatever is there has to go.
+            try? FileManager.default.removeItem(at: target)
+            if outcome.cancelled { throw VideoTrimError.cancelled }
+            throw VideoTrimError.ffmpegFailed(
+                outcome.failureSummary(tool: "ffmpeg"), log: outcome.logText
+            )
         }
 
         return target

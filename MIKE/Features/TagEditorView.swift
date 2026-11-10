@@ -30,6 +30,7 @@ final class TagEditorSession: ObservableObject {
     @Published var isRunning = false
     @Published var status = ""
     @Published var statusKind = StatusLine.Kind.idle
+    @Published var statusDetails: String?
 
     var capabilities: AudioFormatCapabilities {
         guard let sourceFile else {
@@ -72,6 +73,7 @@ final class TagEditorSession: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = AudioTagEditor.acceptedExtensions.compactMap { UTType(filenameExtension: $0) }
         panel.prompt = String(localized: "Choose", comment: "Confirm button in the file picker")
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
         load(chosen, ffmpeg: ffmpeg)
@@ -85,20 +87,24 @@ final class TagEditorSession: ObservableObject {
         coverEdit = .unchanged
         status = ""
         statusKind = .idle
+        statusDetails = nil
+        // Reset here, not only by the read that set it: picking a file with no
+        // tag container while another was still loading left the flag up for
+        // good — the earlier read sees it is no longer current and returns
+        // without touching it.
+        isLoading = false
 
         let formatCapabilities = AudioFormatCapabilities.forExtension(url.pathExtension)
         guard formatCapabilities.supportsTags else { return }
 
         isLoading = true
         Task { [weak self] in
-            let (readTags, cover) = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let readTags = AudioTagEditor.readTags(from: url, ffmpeg: ffmpeg)
-                    let cover = formatCapabilities.supportsCoverArt
-                        ? AudioTagEditor.extractCover(from: url, ffmpeg: ffmpeg)
-                        : nil
-                    continuation.resume(returning: (readTags, cover))
-                }
+            let (readTags, cover) = await Background.run {
+                let readTags = AudioTagEditor.readTags(from: url, ffmpeg: ffmpeg)
+                let cover = formatCapabilities.supportsCoverArt
+                    ? AudioTagEditor.extractCover(from: url, ffmpeg: ffmpeg)
+                    : nil
+                return (readTags, cover)
             }
             // The user may have picked a different file while this was loading.
             guard let self, sourceFile == url else { return }
@@ -115,18 +121,12 @@ final class TagEditorSession: ObservableObject {
 
         isRunning = true
         statusKind = .working
+        statusDetails = nil
         status = String(localized: "Saving…")
 
         Task { [weak self] in
-            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    do {
-                        try AudioTagEditor.write(tags: currentTags, cover: currentCover, to: sourceFile, ffmpeg: ffmpeg)
-                        continuation.resume(returning: .success(()))
-                    } catch {
-                        continuation.resume(returning: .failure(error))
-                    }
-                }
+            let result: Result<Void, Error> = await Background.attempt {
+                try AudioTagEditor.write(tags: currentTags, cover: currentCover, to: sourceFile, ffmpeg: ffmpeg)
             }
 
             guard let self else { return }
@@ -139,6 +139,7 @@ final class TagEditorSession: ObservableObject {
             case .failure(let error):
                 status = error.localizedDescription
                 statusKind = .failure
+                statusDetails = (error as? ToolLogCarrying)?.toolLog
             }
         }
     }
@@ -187,7 +188,7 @@ struct TagEditorView: View {
                         }
                     }
                 }
-                .disabled(!isReady)
+                .disabled(!isReady && !session.isRunning)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -262,7 +263,7 @@ struct TagEditorView: View {
                     Button("Save") { session.save(ffmpeg: ffmpeg) }
                         .buttonStyle(.borderedProminent)
                         .disabled(session.isRunning || session.isLoading)
-                    StatusLine(text: session.status, kind: session.statusKind)
+                    StatusLine(text: session.status, kind: session.statusKind, details: session.statusDetails)
                 }
                 Text("Changes will be written directly to the file.")
                     .font(.caption2)
@@ -334,17 +335,12 @@ struct TagEditorView: View {
     // MARK: - Drag & drop
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !session.isRunning, let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url, AudioTagEditor.acceptedExtensions.contains(url.pathExtension.lowercased())
-            else { return }
-            DispatchQueue.main.async { session.load(url, ffmpeg: ffmpeg) }
+        guard !session.isRunning, !providers.isEmpty else { return false }
+        FileDrop.urls(from: providers) { urls in
+            guard let url = urls.first(where: {
+                AudioTagEditor.acceptedExtensions.contains($0.pathExtension.lowercased())
+            }) else { return }
+            session.load(url, ffmpeg: ffmpeg)
         }
         return true
     }
