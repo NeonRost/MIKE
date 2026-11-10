@@ -121,21 +121,62 @@ clamped to ±90 / ±180 before they become arguments.
 
 ### Long-running processes are cancellable
 
-`ProcessRunner.stream` hands the live `Process` to the caller via `onStart` and
+`ProcessRunner.run` hands the live `Process` to the caller via `onStart` and
 registers it centrally; `ProcessRunner.terminateAll()` runs from
-`applicationWillTerminate` so nothing outlives the app. Sections that start one
-show a Cancel button while it runs.
+`applicationWillTerminate` so nothing outlives the app. `capture` registers its
+process the same way. Sections that start one show a Cancel button while it
+runs — including the ones that only *look* short: Track Splitter's silence
+analysis decodes the whole file, and the Download quality probe waits on a
+remote site.
+
+**Cancel goes through `ProcessRunner.cancel(_:)`, never `terminate()`
+directly, and a run is known to be cancelled because MIKE recorded asking —
+never because of how the process exited.** This was wrong once: the runners
+checked `terminationReason == .uncaughtSignal`, which is true for yt-dlp
+(Python dies by the signal) and false for ffmpeg, which catches SIGTERM,
+finishes its output file and exits 255 like any other failure. Verified
+directly: a cancelled trim was reported in red as "ffmpeg: Exiting normally,
+received signal 15." and left its half-length file behind. `ProcessOutcome.
+cancelled` is the only signal to branch on; do not go back to reading the exit
+status. (`terminate()` does reach a tool's own children — Foundation puts the
+task in its own process group; yt-dlp's ffmpeg dies with it. Verified.)
 
 A cancelled run is **not** an error: it is reported in the neutral status
-colour, and `DownloadRunner` deletes the `.part`, `.ytdl` and `.part-Frag*`
-files belonging to the destinations *that run announced* — never a blanket
-sweep of the folder, where another download may be in progress.
+colour, and its partial output is removed — the half-built file for ffmpeg,
+and for `DownloadRunner` the `.part`, `.ytdl` and `.part-Frag*` files
+belonging to the destinations *that run announced*, never a blanket sweep of
+the folder, where another download may be in progress.
+
+Work that is a loop of short steps rather than one process (Track Splitter's
+cut-then-tag per track, Combine Images, the archive and duplicate code) checks
+a flag between steps — `CancelFlag`, or the `isCancelled` closure handed in —
+because a click that lands between two steps finds no process to stop.
+
+A failure keeps what the tool printed: `ProcessOutcome.log` holds the last
+lines, the error carries them (`ToolLogCarrying`), and `StatusLine` shows them
+behind a **Details** button. The status line itself shows one line, picked by
+`ProcessOutcome.failureSummary`. Do not reintroduce a per-runner "last line,
+cut to 140 characters".
+
+A tool check that *times out* is not a missing tool. `ToolStatus.inconclusive`
+marks it and `ToolRegistry` keeps the previous answer — otherwise a section
+disables itself, Cancel button included, because the machine is busy running
+the very job that section started. For the same reason the sections disable
+their controls with `.disabled(!isReady && !session.isRunning)`.
 
 ### Process invocations are frozen
 
 The `yt-dlp` and `ffmpeg` command lines were carried over verbatim from the
 original Python implementation, including argument order and the download
 profiles per host. They are proven in practice — do not "clean them up".
+
+One deliberate addition: the download passes `--no-playlist`. A watch URL that
+also carries `&list=…` otherwise makes yt-dlp fetch the entire playlist, while
+the quality probe and the duration fetch have always asked about the single
+video — the section showed one video's options and then downloaded dozens.
+All three yt-dlp calls also share one environment now
+(`DownloadRunner.environment`); the probe used to run without the widened
+`PATH` and could see a different set of formats than the download.
 
 ### Download: audio extraction and probed quality
 
@@ -321,10 +362,12 @@ Metadata's job.
 detection) and reconstructs paragraph and line structure itself — Vision hands
 back one observation per **line**, never a paragraph.
 
-- **EXIF orientation must be read and passed explicitly.**
-  `ImageConverter.load(from:)` hands back the raw, un-rotated `CGImage` — fine
-  for format conversion, but Vision needs the real orientation to lay out lines
-  correctly. `TextRecognizer.orientation(from:)` reads it via ImageIO
+- **EXIF orientation must be read and passed explicitly.** This section loads
+  through `ImageConverter.loadUnrotated(from:)` — the raw pixels, tag ignored —
+  because Vision wants the un-rotated image *plus* the orientation, not an
+  image someone already turned. (`ImageConverter.load(from:)` is the opposite:
+  it applies the orientation, and is what every other section uses — see
+  Quick Edit below.) `TextRecognizer.orientation(from:)` reads it via ImageIO
   (`kCGImagePropertyOrientation`, the same property `ImageMetadata` already
   reads) and it goes into `VNImageRequestHandler(cgImage:orientation:)`.
   Skipping this scrambles the reading order on any photo taken in portrait —
@@ -458,6 +501,16 @@ results are not what the documentation would suggest:
   - Raw AAC (`.aac`, ADTS): no metadata of any kind, tags or cover. ADTS has no
     tag container at all. The whole fields section is disabled with a note
     rather than silently no-opping.
+- **Tag keys are matched without regard to case, and a cover's own metadata
+  is not the file's.** Vorbis comments (FLAC, Ogg, Opus) are conventionally
+  upper case and ffmpeg prints them as stored: a FLAC tagged `ARTIST`/`TITLE`/
+  `ALBUM` read back with every field empty until the lookup was lowercased —
+  the ffmpeg-written test files this was first checked against all had
+  lower-case keys. And an embedded cover is a video stream with a `Metadata:`
+  block of its own (`comment: Cover (front)`); collected along with the rest,
+  it turned up in the Comment field of every MP3 with a cover and no comment,
+  and Save then wrote it as a real tag. `collectMetadata` skips blocks under a
+  video stream. Both verified against real files.
 - **Reading tags means parsing the `-i` banner, not `-f ffmetadata -`.**
   `-f ffmetadata -` only surfaces *container*-level metadata. MP3/FLAC/M4A/WAV
   keep their tags there, but Ogg/Opus keep theirs on the *audio stream*
@@ -592,15 +645,90 @@ intent (which MIKE cannot know) or GPU-provided undo, and always-reset is a
 consistent, boring, correctly-documented behavior over a partially-correct
 carry-forward heuristic.
 
-`ExifToolWrite.run` and `MetadataWriter.removeAll`/`removeGPS` take an
-opt-in `skipBackup: Bool = false`, used only by Quick Edit. exiftool's usual
-`_original` backup exists to protect a real source file the user did not
-intend to lose; Quick Edit's metadata step runs on the file it just wrote
-itself a moment earlier at the user's chosen save path — the actual, untouched
-original lives elsewhere and was never opened for writing — so a `_original`
-sidecar next to the save target would only be clutter. Every other caller
-(Metadata, Embedded) still defaults to `skipBackup: false` and keeps the
-existing backup behavior unchanged.
+**Images are loaded upright.** `ImageConverter.load(from:)` applies the EXIF
+orientation (through ImageIO's own transform — a full-size "thumbnail" with
+`kCGImageSourceCreateThumbnailWithTransform`), and `metadata(from:)` resets
+the orientation tag to 1 so the carried-over metadata does not turn the
+picture a second time. Before this, the raw sensor pixels were read and
+written back without the tag: verified with a 400×200 source tagged
+orientation 6, which came out of Convert Format as an untagged 400×200 — every
+portrait phone photo on its side. Anything that copies the *file* instead of
+the pixels (the image EPUB) has to account for the tag itself; `EPUBBuilder`
+swaps the page dimensions for orientations 5–8.
+
+**Quick Edit strips metadata by not writing it, and needs no exiftool.** The
+output contains exactly what the metadata dictionary passed to
+`ImageConverter.write` contains, so "Remove GPS data" drops
+`kCGImagePropertyGPSDictionary` from it and "Remove all metadata" passes
+nothing. Verified with exiftool on the result: no GPS tags, capture date still
+there. This used to be a second pass with exiftool over the finished file —
+which tied the section's most privacy-relevant switch to an optional tool,
+showed it ticked-but-disabled without it, and left a file with its location
+intact on disk whenever that pass failed. `ExifToolWrite`'s former
+`skipBackup` parameter existed only for that pass and is gone with it.
+
+Text fields that commit on Return also commit when they lose focus
+(`commitOnBlur`) and once more right before the action that uses them
+(`commitFields` / `commitTrackFields` / `commitTextFields`). Without that, a
+value typed into Start, End, a crop field or a track boundary stayed on screen
+while the action ran with the previous one. Two fields that bound each other
+are resolved together, not one after the other.
+
+### Files: what was verified the hard way
+
+**Compression.**
+
+- A TAR entry needs its mode and date set explicitly. `TarEntryInfo` starts
+  with neither, and what that writes is mode 000 dated 1970 — verified: an
+  archive packed that way unpacked with `/usr/bin/tar` into a folder its owner
+  got "Permission denied" on. `ArchiveBuilder` copies both from the source
+  file; `ArchiveExtractor` applies them on the way out (permission bits only,
+  never setuid/setgid from someone else's archive).
+- Encrypted ZIP entries are found by reading the central directory
+  (`ZipEncryptionScan.containsEncryptedEntry(at:)`), not by searching the file
+  for the local-header signature. The search matched `PK\x03\x04` inside entry
+  *data* too and refused ordinary archives as password-protected — verified
+  with a ZIP that `unzip -t` passed. It also loaded the whole file to do it.
+- TAR.GZ is bounded (`TarGzLimits`): SWCompression has no streaming interface
+  and holds the archive in memory several times over. ZIP goes through
+  ZIPFoundation file by file and is not bounded.
+- Hidden files are packed; only `.DS_Store` is left out. An archive that
+  silently drops `.env` or `.gitignore` is not a copy of the folder.
+- A cancelled or failed pack removes its partial archive, a cancelled or
+  failed unpack the folder it created — a ZIP cut short opens fine and is
+  simply missing files.
+
+**Find Duplicates.** The scan never enters packages
+(`.skipsPackageDescendants`) — verified that without it a `.photoslibrary`'s
+own `originals` were offered for the Trash next to an ordinary copy — and it
+ignores empty files, which are all "identical" to each other and usually there
+on purpose. `HashCalculator` throws on a failed read instead of treating it as
+end of file: the digest of a partial read is a wrong checksum that looks like
+a right one, and two unreadable files of one size would "match".
+
+**Batch Rename.** A row blocks the rename when its new name collides with
+another row *in the same folder* (compared without regard to case), when a
+file outside the batch already has that name, or when the name is not a usable
+file name (`FileName.problem`). A name currently held by another file *of the
+batch* is not a conflict: `BatchRenamer.execute` moves such files through a
+temporary name, which is what makes swaps, chains and case-only changes work.
+`BatchRenamer.key(for:)` is deliberately textual — `standardizedFileURL`
+consults the disk (it drops a leading `/private` only while the file exists),
+so one path had two keys depending on whether its file had been moved yet,
+and a swap fell apart halfway. Verified.
+
+### Shared building blocks
+
+Use these rather than writing the pattern out again:
+
+- `Background.run` / `Background.attempt` — blocking work off the main thread.
+- `ProcessRunner.run` / `.capture` / `.cancel` — every external process.
+- `FileDrop.urls(from:)` and the `.acceptsFileDrop` modifier — every drop.
+- `CropOverlay` (in `CropGeometry.swift`) — the crop frame, for both Quick
+  Edit and Trim Video.
+- `FileName.sanitizedStem` / `.problem(inStem:)` — any typed text that becomes
+  a file name.
+- `StatusLine(text:kind:details:)`, `commitOnBlur`, `CancelFlag`.
 
 ### The app is localized
 
@@ -662,21 +790,11 @@ switched with `<picture>`; refresh them when those shots are retaken.
 
 ## Open items
 
-- **No standing-rules sections yet for the five Files-category tools**: Hash
-  Check, Batch Rename, File Info, Find Duplicates, and Compression. Every
-  other non-trivial section in this file earned its own subsection under
-  "Standing rules" documenting the non-obvious decisions and gotchas found
-  while building and verifying it (the `_original` backup rule, the
-  Convert Encoding constant-name traps, the audio container capability
-  matrix, and so on). These five tools almost certainly have comparable
-  decisions buried in their code — e.g. Compression's password-protection
-  detection workaround, its pinned SWCompression/BitByteData versions for
-  macOS 13 compatibility, or Batch Rename's conflict-detection rule — but
-  writing that up from a fresh read of the code would be guessing at which
-  details were actually load-bearing versus incidental. Deliberately left
-  unwritten here rather than filled in from assumption; add real subsections
-  once each tool's non-obvious behavior has been verified the way the
-  existing sections were, not reconstructed from reading the source once.
+- **No standing-rules sections yet for Hash Check and File Info.** The other
+  three Files tools have theirs now (see "Files" under Standing rules), each
+  written from behaviour that was actually reproduced. These two were only
+  read, not exercised beyond the hash read-error fix; the same "write it up
+  once verified, don't guess" rule applies.
 - **Trim Video's crop addition is undocumented too**: the section above only
   describes Trim Video's original cut-without-re-encoding behavior. The
   optional crop (re-encodes to H.264/AAC, relies on ffmpeg's own autorotate
