@@ -160,7 +160,6 @@ struct TagEditorView: View {
     private var isReady: Bool { missingTools.isEmpty }
     private var ffmpeg: URL? { tools.status(for: .ffmpeg).url }
 
-    private var canClear: Bool { !session.isRunning && !session.isLoading && session.sourceFile != nil }
 
     var body: some View {
         // The ScrollView matters beyond overflow: without it the detail column
@@ -214,9 +213,6 @@ struct TagEditorView: View {
             .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
                 handleDrop(providers)
             }
-            Spacer(minLength: 0)
-            Button("Clear") { session.clear() }
-                .disabled(!canClear)
         }
     }
 

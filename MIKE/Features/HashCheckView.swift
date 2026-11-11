@@ -126,7 +126,6 @@ struct HashCheckView: View {
 
     @State private var isDropTargeted = false
 
-    private var canClear: Bool { !session.isCalculating && session.sourceFile != nil }
 
     var body: some View {
         // The ScrollView matters beyond overflow: without it the detail column
@@ -151,8 +150,6 @@ struct HashCheckView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Button("Clear") { session.clear() }
-                        .disabled(!canClear)
                     StatusLine(text: session.status, kind: session.statusKind)
                 }
             }

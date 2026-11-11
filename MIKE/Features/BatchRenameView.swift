@@ -410,7 +410,11 @@ struct BatchRenameView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
+                // Its own width, not a fixed cap: the German labels are wider
+                // than 320pt, and a segmented control that does not fit is
+                // centred on its frame and spills out to the left — over the
+                // sidebar edge, with "Kleinbuchstaben" cut off.
+                .fixedSize()
             }
 
             OperationBlock(title: "Replace Spaces", isEnabled: $session.spaceReplacementEnabled, isBusy: session.isRenaming) {

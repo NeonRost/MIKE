@@ -290,7 +290,6 @@ struct QuickEditView: View {
     private var webpEncoder: WebPEncoder? { tools.webpEncoder }
     private var canEncodeWebP: Bool { webpEncoder != nil }
     private var canSave: Bool { session.canSave(canEncodeWebP: canEncodeWebP) }
-    private var canClear: Bool { session.sourceFile != nil }
 
     var body: some View {
         // The canvas wants room, but a hard minimum wider than the window can
@@ -558,8 +557,6 @@ struct QuickEditView: View {
                 Button("Save…") { save() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
-                Button("Clear") { session.clear() }
-                    .disabled(!canClear || session.isSaving)
                 StatusLine(text: session.status, kind: session.statusKind)
             }
             Text("The original file is never changed — Save always writes a new file.")

@@ -198,7 +198,6 @@ struct ConvertEncodingView: View {
     /// encoding is right without loading or rendering an entire large file.
     private static let previewLength = 500
 
-    private var canClear: Bool { session.sourceFile != nil }
 
     var body: some View {
         // The ScrollView matters beyond overflow: without it the detail column
@@ -343,8 +342,6 @@ struct ConvertEncodingView: View {
                 Button("Save") { session.save(directory: directory) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!session.canSave)
-                Button("Clear") { session.clear() }
-                    .disabled(!canClear)
                 StatusLine(text: session.status, kind: session.statusKind)
             }
         }

@@ -113,7 +113,6 @@ struct FileInfoView: View {
 
     @State private var isDropTargeted = false
 
-    private var canClear: Bool { !session.isLoading && session.sourceFile != nil }
 
     var body: some View {
         // The ScrollView matters beyond overflow: without it the detail column
@@ -128,9 +127,6 @@ struct FileInfoView: View {
 
                 HStack(spacing: 12) {
                     fileRow
-                    Spacer(minLength: 0)
-                    Button("Clear") { session.clear() }
-                        .disabled(!canClear)
                 }
 
                 if session.isLoading {

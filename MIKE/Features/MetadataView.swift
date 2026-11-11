@@ -227,7 +227,6 @@ struct MetadataView: View {
 
     private var canEdit: Bool { tools.isAvailable(.exiftool) }
 
-    private var canClear: Bool { !session.isWorking && session.sourceFile != nil }
 
     var body: some View {
         ScrollView {
@@ -248,9 +247,6 @@ struct MetadataView: View {
                     .acceptsFileDrop(isEnabled: !session.isWorking) { urls in
                         if let url = urls.first(where: FileDrop.isFile) { session.load(url) }
                     }
-                    Spacer(minLength: 0)
-                    Button("Clear") { session.clear() }
-                        .disabled(!canClear)
                 }
 
                 if session.sourceFile != nil {
